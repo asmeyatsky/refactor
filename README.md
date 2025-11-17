@@ -61,7 +61,15 @@ Infrastructure Layer
 ├── Repositories: Codebase, Plan, File storage
 ├── Adapters: Code analysis, LLM, AST, Testing, Service Mapping
 └── Config: Dependency injection
+
+Presentation Layer
+├── API: REST endpoints for web and programmatic access
+└── UI: React-based web interface
 ```
+
+## Automatic Git Hooks
+
+This repository includes a post-commit hook that automatically pushes changes to the remote repository when committing to the main branch.
 
 ## Installation
 
