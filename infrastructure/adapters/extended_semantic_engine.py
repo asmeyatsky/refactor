@@ -225,18 +225,23 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         code = re.sub(r'^from boto3', 'from google.cloud import storage', code, flags=re.MULTILINE)
         
         # Replace client instantiation - handle various formats
+        # Change s3_client to gcs_client for better naming
         code = re.sub(
             r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)',
-            r'\1 = storage.Client()',
+            r'gcs_client = storage.Client()  # Use a better name for the GCS client',
             code,
             flags=re.DOTALL
         )
         
+        # Also replace any remaining s3_client references to gcs_client
+        code = re.sub(r'\bs3_client\b', 'gcs_client', code)
+        
         # Replace S3 upload_file -> GCS upload_from_filename
         # Pattern: s3_client.upload_file('local_file.txt', 'bucket-name', 'remote_file.txt')
+        # Should produce cleaner code with proper variable names
         code = re.sub(
             r'(\w+)\.upload_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
-            r'bucket = \1.bucket("\3")\n    blob = bucket.blob("\4")\n    blob.upload_from_filename("\2")',
+            r'bucket = \1.bucket("\3")\nblob = bucket.blob("\4")\nblob.upload_from_filename("\2")',
             code
         )
         
@@ -244,7 +249,7 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Pattern: s3_client.download_file('bucket-name', 'remote_file.txt', 'local_file.txt')
         code = re.sub(
             r'(\w+)\.download_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
-            r'bucket = \1.bucket("\2")\n    blob = bucket.blob("\3")\n    blob.download_to_filename("\4")',
+            r'bucket = \1.bucket("\2")\nblob = bucket.blob("\3")\nblob.download_to_filename("\4")',
             code
         )
         
@@ -270,18 +275,49 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         )
         
         # Replace S3 list_objects_v2 -> GCS list_blobs
+        # Pattern: response = s3_client.list_objects_v2(Bucket='my-bucket')
+        # Should become: blobs = gcs_client.list_blobs(bucket_name)
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.list_objects_v2\(Bucket=([^,\)]+)\)',
+            r'blobs = \2.list_blobs(\3)',
+            code
+        )
         code = re.sub(
             r'(\w+)\.list_objects_v2\(Bucket=([^,\)]+)\)',
-            r'bucket = \1.bucket(\2)\n    blobs = list(bucket.list_blobs())',
+            r'blobs = \1.list_blobs(\2)',
             code
         )
         
         # Replace S3 list_objects -> GCS list_blobs
         code = re.sub(
-            r'(\w+)\.list_objects\(Bucket=([^,\)]+)\)',
-            r'bucket = \1.bucket(\2)\n    blobs = list(bucket.list_blobs())',
+            r'(\w+)\s*=\s*(\w+)\.list_objects\(Bucket=([^,\)]+)\)',
+            r'blobs = \2.list_blobs(\3)',
             code
         )
+        code = re.sub(
+            r'(\w+)\.list_objects\(Bucket=([^,\)]+)\)',
+            r'blobs = \1.list_blobs(\2)',
+            code
+        )
+        
+        # Fix loops that use response.get('Contents', []) pattern
+        # Pattern: for obj in response.get('Contents', []): print(obj['Key'])
+        # Should become: for blob in blobs: print(blob.name)
+        code = re.sub(
+            r'for\s+obj\s+in\s+(\w+)\.get\([\'"]Contents[\'"],\s*\[\]\):',
+            r'for blob in blobs:',
+            code
+        )
+        code = re.sub(
+            r'for\s+(\w+)\s+in\s+(\w+)\.get\([\'"]Contents[\'"],\s*\[\]\):',
+            r'for blob in \2:',
+            code
+        )
+        # Replace obj['Key'] with blob.name (obj variable becomes blob)
+        code = re.sub(r"obj\['Key'\]", r'blob.name', code)
+        code = re.sub(r'obj\["Key"\]', r'blob.name', code)
+        # Also handle any other obj references in the loop context
+        code = re.sub(r'\bobj\b', 'blob', code)  # Replace obj with blob in loop context
         
         # Replace S3 list_buckets -> GCS list_buckets
         # Handle assignment pattern: buckets = s3.list_buckets()
