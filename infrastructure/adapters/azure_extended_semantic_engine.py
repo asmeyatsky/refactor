@@ -409,42 +409,174 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
     def _migrate_aws_s3_to_gcs(self, code: str) -> str:
         """Migrate AWS S3 to Google Cloud Storage"""
         # Replace boto3 imports with GCS imports
-        code = re.sub(r'import boto3', 'from google.cloud import storage', code)
-        code = re.sub(r'from boto3', 'from google.cloud import storage', code)
+        code = re.sub(r'^import boto3\s*$', 'from google.cloud import storage', code, flags=re.MULTILINE)
+        code = re.sub(r'^from boto3', 'from google.cloud import storage', code, flags=re.MULTILINE)
         
-        # Replace client instantiation
+        # Replace client instantiation - handle various formats
         code = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*\)',
+            r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)',
             r'\1 = storage.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        
+        # Replace S3 upload_file -> GCS upload_from_filename
+        code = re.sub(
+            r'(\w+)\.upload_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
+            r'bucket = \1.bucket("\3")\n    blob = bucket.blob("\4")\n    blob.upload_from_filename("\2")',
             code
         )
         
-        # Replace S3 operations with GCS equivalents
-        # put_object -> upload
+        # Replace S3 download_file -> GCS download_to_filename
         code = re.sub(
-            r'(\w+)\.put_object\(Bucket=([^,]+), Key=([^,]+), Body=([^,\)]+)',
+            r'(\w+)\.download_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
+            r'bucket = \1.bucket("\2")\n    blob = bucket.blob("\3")\n    blob.download_to_filename("\4")',
+            code
+        )
+        
+        # Replace S3 put_object -> GCS upload
+        code = re.sub(
+            r'(\w+)\.put_object\(Bucket=([^,]+),\s*Key=([^,]+),\s*Body=([^,\)]+)',
             r'bucket = \1.bucket(\2)\n    blob = bucket.blob(\3)\n    blob.upload_from_string(\4)',
             code
         )
         
-        # get_object -> download
+        # Replace S3 get_object -> GCS download
         code = re.sub(
-            r'(\w+)\.get_object\(Bucket=([^,]+), Key=([^,\)]+)\)',
+            r'(\w+)\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
             r'bucket = \1.bucket(\2)\n    blob = bucket.blob(\3)\n    content = blob.download_as_text()',
             code
         )
         
-        # delete_object -> delete
+        # Replace S3 delete_object -> GCS delete
         code = re.sub(
-            r'(\w+)\.delete_object\(Bucket=([^,]+), Key=([^,\)]+)\)',
+            r'(\w+)\.delete_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
             r'bucket = \1.bucket(\2)\n    blob = bucket.blob(\3)\n    blob.delete()',
             code
         )
         
-        # list_objects -> list_blobs
+        # Replace S3 list_objects_v2 -> GCS list_blobs
+        code = re.sub(
+            r'(\w+)\.list_objects_v2\(Bucket=([^,\)]+)\)',
+            r'bucket = \1.bucket(\2)\n    blobs = list(bucket.list_blobs())',
+            code
+        )
+        
+        # Replace S3 list_objects -> GCS list_blobs
         code = re.sub(
             r'(\w+)\.list_objects\(Bucket=([^,\)]+)\)',
             r'bucket = \1.bucket(\2)\n    blobs = list(bucket.list_blobs())',
+            code
+        )
+        
+        # Replace S3 list_buckets -> GCS list_buckets
+        # Handle assignment pattern: buckets = s3.list_buckets()
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.list_buckets\(\)',
+            r'\1 = list(\2.list_buckets())',
+            code
+        )
+        # Handle direct call pattern: s3.list_buckets() (but not if already wrapped in list())
+        code = re.sub(
+            r'(\w+)\.list_buckets\(\)(?!\s*\))',
+            r'list(\1.list_buckets())',
+            code
+        )
+        
+        # Replace S3 create_bucket -> GCS create_bucket
+        code = re.sub(
+            r'(\w+)\.create_bucket\(Bucket=([^,]+)(?:,\s*CreateBucketConfiguration=[^\)]+)?\)',
+            r'\1.create_bucket(\2)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.create_bucket\(Bucket=([^,\)]+)\)',
+            r'\1.create_bucket(\2)',
+            code
+        )
+        
+        # Replace S3 delete_bucket -> GCS delete_bucket
+        code = re.sub(
+            r'(\w+)\.delete_bucket\(Bucket=([^,\)]+)\)',
+            r'bucket = \1.bucket(\2)\n    bucket.delete()',
+            code
+        )
+        
+        # Remove or comment AWS region names
+        # Replace AWS region constants/variables
+        aws_regions = [
+            'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
+            'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1',
+            'ap-southeast-1', 'ap-southeast-2', 'ap-northeast-1', 'ap-northeast-2',
+            'ap-south-1', 'sa-east-1', 'ca-central-1'
+        ]
+        for region in aws_regions:
+            # Comment out region assignments
+            code = re.sub(
+                rf'(\w+)\s*=\s*[\'"]{region}[\'"]',
+                rf'# \1 = \'{region}\'  # AWS region - not needed for GCP',
+                code
+            )
+            # Replace region_name parameter in client calls (already handled above, but ensure it's removed)
+            code = re.sub(
+                rf',\s*region_name=[\'"]?{region}[\'"]?',
+                '',
+                code
+            )
+            code = re.sub(
+                rf'region_name=[\'"]?{region}[\'"]?\s*,',
+                '',
+                code
+            )
+        
+        # Remove region_name parameter completely if still present
+        code = re.sub(
+            r',\s*region_name=\w+',
+            '',
+            code
+        )
+        code = re.sub(
+            r'region_name=\w+\s*,',
+            '',
+            code
+        )
+        
+        # Replace botocore exceptions imports
+        # Handle multiple imports on one line first (most specific pattern first)
+        if 'NoCredentialsError' in code and 'ClientError' in code:
+            # Check if they're on the same import line
+            code = re.sub(
+                r'from botocore\.exceptions import\s+NoCredentialsError,\s*ClientError',
+                'from google.auth.exceptions import DefaultCredentialsError\nfrom google.api_core import exceptions',
+                code
+            )
+            code = re.sub(
+                r'from botocore\.exceptions import\s+ClientError,\s*NoCredentialsError',
+                'from google.auth.exceptions import DefaultCredentialsError\nfrom google.api_core import exceptions',
+                code
+            )
+        
+        # Handle single NoCredentialsError import
+        code = re.sub(
+            r'from botocore\.exceptions import\s+NoCredentialsError\b',
+            'from google.auth.exceptions import DefaultCredentialsError',
+            code
+        )
+        # Handle single ClientError import
+        code = re.sub(
+            r'from botocore\.exceptions import\s+ClientError\b',
+            'from google.api_core import exceptions',
+            code
+        )
+        # Replace exception usage (after imports are fixed)
+        code = re.sub(
+            r'\bNoCredentialsError\b',
+            'DefaultCredentialsError',
+            code
+        )
+        code = re.sub(
+            r'\bClientError\b',
+            'exceptions.GoogleAPIError',
             code
         )
         
@@ -453,7 +585,16 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
     def _migrate_aws_lambda_to_cloud_functions(self, code: str) -> str:
         """Migrate AWS Lambda to Google Cloud Functions"""
         # Replace Lambda client imports
-        code = re.sub(r'import boto3', 'from google.cloud import functions_v1\nimport functions_framework', code)
+        code = re.sub(r'^import boto3\s*$', 'from google.cloud import functions_v1\nimport functions_framework', code, flags=re.MULTILINE)
+        code = re.sub(r'^from boto3', 'from google.cloud import functions_v1\nimport functions_framework', code, flags=re.MULTILINE)
+        
+        # Replace Lambda client instantiation
+        code = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\([\'\"]lambda[\'\"].*?\)',
+            r'\1 = functions_v1.CloudFunctionsServiceClient()',
+            code,
+            flags=re.DOTALL
+        )
         
         # Replace Lambda function decorator patterns
         code = re.sub(
@@ -464,44 +605,137 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
         
         # Replace Lambda invocation calls
         code = re.sub(
-            r'lambda_client\.invoke\(FunctionName=([^,\)]+), Payload=([^,\)]+)\)',
-            r'from google.cloud import functions_v1\nclient = functions_v1.CloudFunctionsServiceClient()\n# Manual invocation required',
+            r'(\w+)\.invoke\(FunctionName=([^,]+),\s*InvocationType=([^,]+)?,\s*Payload=([^,\)]+)\)',
+            r'# Cloud Functions invocation via HTTP or Pub/Sub\n# Function: \2\n# Payload: \4',
             code
         )
         
+        # Replace create_function
+        code = re.sub(
+            r'(\w+)\.create_function\(FunctionName=([^,]+),\s*Runtime=([^,]+),\s*Role=([^,]+),\s*Handler=([^,]+),\s*Code=([^,\)]+)\)',
+            r'# Cloud Functions deployment via gcloud or Cloud Build\n# Function name: \2\n# Runtime: \3\n# Entry point: \5',
+            code
+        )
+        
+        # Add exception handling
+        code = self._add_exception_handling(code)
+        
         return code
-
+    
     def _migrate_aws_dynamodb_to_firestore(self, code: str) -> str:
         """Migrate AWS DynamoDB to Google Cloud Firestore"""
         # Replace DynamoDB imports
-        code = re.sub(r'import boto3', 'from google.cloud import firestore', code)
+        code = re.sub(r'^import boto3\s*$', 'from google.cloud import firestore', code, flags=re.MULTILINE)
+        code = re.sub(r'^from boto3', 'from google.cloud import firestore', code, flags=re.MULTILINE)
+        
+        # Replace DynamoDB resource (common pattern)
+        code = re.sub(
+            r'(\w+)\s*=\s*boto3\.resource\([\'\"]dynamodb[\'\"].*?\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL
+        )
         
         # Replace DynamoDB client instantiation
         code = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\([\'\"]dynamodb[\'\"].*\)',
+            r'(\w+)\s*=\s*boto3\.client\([\'\"]dynamodb[\'\"].*?\)',
             r'\1 = firestore.Client()',
-            code
+            code,
+            flags=re.DOTALL
         )
         
         # Replace table operations with collection/document operations
+        # table.put_item() -> collection.add() or document.set()
         code = re.sub(
-            r'dynamodb\.put_item\(TableName=([^,]+), Item=([^,\)]+)\)',
-            r'db.collection(\1).add(\2)',
+            r'(\w+)\.put_item\(Item=([^,\)]+)\)',
+            r'doc_ref = \1.document()\n    doc_ref.set(\2)',
             code
         )
         
         code = re.sub(
-            r'dynamodb\.get_item\(TableName=([^,]+), Key=([^,\)]+)\)',
-            r'doc = db.collection(\1).document(\2)\n    result = doc.get()',
+            r'(\w+)\.put_item\(TableName=([^,]+),\s*Item=([^,\)]+)\)',
+            r'db.collection(\2).document().set(\3)',
+            code
+        )
+        
+        # table.get_item() -> document.get()
+        code = re.sub(
+            r'(\w+)\.get_item\(Key=([^,\)]+)\)',
+            r'doc_ref = \1.document(\2)\n    doc = doc_ref.get()',
             code
         )
         
         code = re.sub(
-            r'dynamodb\.query\(TableName=([^,]+), KeyConditionExpression=([^,\)]+)\)',
-            r'query = db.collection(\1).where(\2)\n    results = query.stream()',
+            r'(\w+)\.get_item\(TableName=([^,]+),\s*Key=([^,\)]+)\)',
+            r'doc = db.collection(\2).document(\3).get()',
             code
         )
         
+        # table.query() -> collection.where()
+        code = re.sub(
+            r'(\w+)\.query\(KeyConditionExpression=([^,\)]+)\)',
+            r'query = \1.where(\2)\n    results = query.stream()',
+            code
+        )
+        
+        code = re.sub(
+            r'(\w+)\.query\(TableName=([^,]+),\s*KeyConditionExpression=([^,\)]+)\)',
+            r'query = db.collection(\2).where(\3)\n    results = query.stream()',
+            code
+        )
+        
+        # table.delete_item() -> document.delete()
+        code = re.sub(
+            r'(\w+)\.delete_item\(Key=([^,\)]+)\)',
+            r'\1.document(\2).delete()',
+            code
+        )
+        
+        # Add exception handling
+        code = self._add_exception_handling(code)
+        
+        return code
+    
+    def _add_exception_handling(self, code: str) -> str:
+        """Add exception handling transformations for all cloud services"""
+        # Replace botocore exceptions imports
+        # Handle multiple imports on one line first (most specific pattern first)
+        if 'NoCredentialsError' in code and 'ClientError' in code:
+            # Check if they're on the same import line
+            code = re.sub(
+                r'from botocore\.exceptions import\s+NoCredentialsError,\s*ClientError',
+                'from google.auth.exceptions import DefaultCredentialsError\nfrom google.api_core import exceptions',
+                code
+            )
+            code = re.sub(
+                r'from botocore\.exceptions import\s+ClientError,\s*NoCredentialsError',
+                'from google.auth.exceptions import DefaultCredentialsError\nfrom google.api_core import exceptions',
+                code
+            )
+        
+        # Handle single NoCredentialsError import
+        code = re.sub(
+            r'from botocore\.exceptions import\s+NoCredentialsError\b',
+            'from google.auth.exceptions import DefaultCredentialsError',
+            code
+        )
+        # Handle single ClientError import
+        code = re.sub(
+            r'from botocore\.exceptions import\s+ClientError\b',
+            'from google.api_core import exceptions',
+            code
+        )
+        # Replace exception usage (after imports are fixed)
+        code = re.sub(
+            r'\bNoCredentialsError\b',
+            'DefaultCredentialsError',
+            code
+        )
+        code = re.sub(
+            r'\bClientError\b',
+            'exceptions.GoogleAPIError',
+            code
+        )
         return code
 
 

@@ -9,6 +9,7 @@ Architectural Intent:
 
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+import os
 
 from domain.entities.codebase import Codebase, ProgrammingLanguage
 from domain.entities.refactoring_plan import RefactoringPlan, RefactoringTask
@@ -109,13 +110,41 @@ class CreateMultiServiceRefactoringPlanUseCase:
 
         for service in services_to_migrate:
             # Get files related to this service
-            for file_path in codebase.files:
+            # If codebase.files is empty or doesn't match, use codebase.path to find files
+            files_to_check = codebase.files if codebase.files else []
+            
+            # If no files in codebase.files, search the codebase path for files
+            if not files_to_check:
+                import glob
+                codebase_dir = codebase.path
+                if os.path.isdir(codebase_dir):
+                    # Look for Python files
+                    files_to_check = glob.glob(os.path.join(codebase_dir, '*.py'))
+                    # Also check for the common 'code.py' or 'code.{language}' pattern
+                    lang_ext = {'python': '.py', 'java': '.java'}.get(codebase.language.value, '.py')
+                    code_file = os.path.join(codebase_dir, f'code{lang_ext}')
+                    if os.path.exists(code_file) and code_file not in files_to_check:
+                        files_to_check.append(code_file)
+            
+            for file_path in files_to_check:
                 try:
+                    if not os.path.exists(file_path):
+                        continue
+                        
                     with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                         content = f.read()
                         # Check if this file contains the service (handle both aws_ and azure_ prefixes)
                         service_lower = service.lower()
-                        if service_lower.replace('aws_', '').replace('azure_', '') in content.lower():
+                        service_clean = service_lower.replace('aws_', '').replace('azure_', '')
+                        
+                        # More flexible matching - check for service patterns in code
+                        service_found = False
+                        if service_clean == 's3' and ('boto3' in content.lower() or 's3' in content.lower() or 'import boto3' in content):
+                            service_found = True
+                        elif service_clean in content.lower():
+                            service_found = True
+                        
+                        if service_found:
                             # Determine if this is AWS or Azure service
                             if service.startswith('aws_'):
                                 provider = "AWS"
@@ -128,17 +157,44 @@ class CreateMultiServiceRefactoringPlanUseCase:
                                 service_name = service.upper()
 
                             task = RefactoringTask(
-                                id=f"task_{task_id_counter}_{service}_{file_path.replace('/', '_').replace('.', '_')}",
+                                id=f"task_{task_id_counter}_{service}_{os.path.basename(file_path).replace('.', '_')}",
                                 description=f"Refactor {file_path} to replace {provider} {service_name} with GCP equivalent",
                                 file_path=file_path,
                                 operation=f"migrate_{service.lower()}_to_gcp"
                             )
                             all_tasks.append(task)
                             task_id_counter += 1
-                except Exception:
+                            break  # Found a file for this service, move to next service
+                except Exception as e:
+                    import traceback
+                    print(f"Error processing file {file_path}: {e}")
+                    traceback.print_exc()
                     continue
 
-        # If no specific service files found, create a general analysis task
+        # If no specific service files found but services were requested, create a task for the codebase
+        if not all_tasks and services_to_migrate:
+            # Try to find any code file in the codebase
+            codebase_dir = codebase.path
+            lang_ext = {'python': '.py', 'java': '.java'}.get(codebase.language.value, '.py')
+            potential_files = [
+                os.path.join(codebase_dir, f'code{lang_ext}'),
+                os.path.join(codebase_dir, 'code.py'),
+                os.path.join(codebase_dir, 'main.py'),
+            ]
+            
+            for file_path in potential_files:
+                if os.path.exists(file_path):
+                    service = services_to_migrate[0]  # Use first service
+                    task = RefactoringTask(
+                        id=f"task_0_{service}_code",
+                        description=f"Refactor {file_path} to replace {service.upper()} with GCP equivalent",
+                        file_path=file_path,
+                        operation=f"migrate_{service.lower()}_to_gcp"
+                    )
+                    all_tasks.append(task)
+                    break
+        
+        # If still no tasks, create a general analysis task
         if not all_tasks:
             all_tasks.append(RefactoringTask(
                 id="task_general_analysis",
@@ -173,13 +229,15 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
         plan_repo: PlanRepositoryPort,
         codebase_repo: CodebaseRepositoryPort,
         file_repo: FileRepositoryPort,
-        test_runner: TestRunnerPort
+        test_runner: TestRunnerPort,
+        llm_provider: Optional[LLMProviderPort] = None
     ):
         self.refactoring_service = refactoring_service
         self.plan_repo = plan_repo
         self.codebase_repo = codebase_repo
         self.file_repo = file_repo
         self.test_runner = test_runner
+        self.llm_provider = llm_provider
 
     def execute(self, plan_id: str) -> RefactoringResult:
         """Execute the multi-service refactoring plan and return results"""
@@ -196,6 +254,7 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
         warnings = []
         transformed_files = 0
         service_results = {}
+        all_variable_mappings = {}  # Collect variable mappings from all tasks
 
         for task in plan.get_pending_tasks():
             try:
@@ -255,45 +314,164 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
             transformed_files=transformed_files,
             errors=errors,
             warnings=warnings,
-            service_results=service_results
+            service_results=service_results,
+            variable_mapping=all_variable_mappings
         )
 
     def _get_service_type_from_operation(self, operation: str) -> str:
         """Extract service type from operation string"""
-        if 's3' in operation.lower():
+        operation_lower = operation.lower()
+        
+        # Handle migrate_<service>_to_gcp format
+        if 'migrate_' in operation_lower and '_to_gcp' in operation_lower:
+            # Extract service name from migrate_<service>_to_gcp
+            service_part = operation_lower.replace('migrate_', '').replace('_to_gcp', '')
+            
+            # Map service names to transformation types
+            if service_part == 's3' or 's3' in service_part:
+                return 's3_to_gcs'
+            elif service_part == 'lambda' or 'lambda' in service_part:
+                return 'lambda_to_cloud_functions'
+            elif service_part == 'dynamodb' or 'dynamodb' in service_part:
+                return 'dynamodb_to_firestore'
+            elif service_part == 'sqs' or 'sqs' in service_part:
+                return 'sqs_to_pubsub'
+            elif service_part == 'sns' or 'sns' in service_part:
+                return 'sns_to_pubsub'
+            elif service_part == 'rds' or 'rds' in service_part:
+                return 'rds_to_cloud_sql'
+            elif 'cloudwatch' in service_part:
+                return 'cloudwatch_to_monitoring'
+            elif 'apigateway' in service_part or 'api_gateway' in service_part:
+                return 'apigateway_to_apigee'
+            elif service_part == 'eks' or 'eks' in service_part:
+                return 'eks_to_gke'
+            elif service_part == 'fargate' or 'fargate' in service_part:
+                return 'fargate_to_cloudrun'
+            elif 'blob_storage' in service_part or 'azure_blob' in service_part:
+                return 'azure_blob_storage_to_gcs'
+            elif 'cosmos_db' in service_part or 'azure_cosmos' in service_part:
+                return 'azure_cosmos_db_to_firestore'
+            elif 'functions' in service_part and 'azure' in service_part:
+                return 'azure_functions_to_cloud_functions'
+        
+        # Fallback: check for service names directly in operation
+        if 's3' in operation_lower:
             return 's3_to_gcs'
-        elif 'lambda' in operation.lower():
+        elif 'lambda' in operation_lower:
             return 'lambda_to_cloud_functions'
-        elif 'dynamodb' in operation.lower():
+        elif 'dynamodb' in operation_lower:
             return 'dynamodb_to_firestore'
-        elif 'sqs' in operation.lower():
+        elif 'sqs' in operation_lower:
             return 'sqs_to_pubsub'
-        elif 'sns' in operation.lower():
+        elif 'sns' in operation_lower:
             return 'sns_to_pubsub'
-        elif 'rds' in operation.lower():
+        elif 'rds' in operation_lower:
             return 'rds_to_cloud_sql'
-        elif 'cloudwatch' in operation.lower():
+        elif 'cloudwatch' in operation_lower:
             return 'cloudwatch_to_monitoring'
-        elif 'apigateway' in operation.lower():
+        elif 'apigateway' in operation_lower or 'api_gateway' in operation_lower:
             return 'apigateway_to_apigee'
-        elif 'eks' in operation.lower():
+        elif 'eks' in operation_lower:
             return 'eks_to_gke'
-        elif 'fargate' in operation.lower():
+        elif 'fargate' in operation_lower:
             return 'fargate_to_cloudrun'
         else:
             return 'unknown'
 
     def _execute_service_refactoring(self, codebase: Codebase, task: RefactoringTask, service_type: str) -> str:
         """Execute refactoring for a specific service type"""
-        # This would integrate with the extended semantic engine
-        # For now, we'll simulate the refactoring
-
+        from infrastructure.adapters.extended_semantic_engine import ExtendedSemanticRefactoringService, ExtendedASTTransformationEngine
+        from infrastructure.adapters.azure_extended_semantic_engine import AzureExtendedSemanticRefactoringService, AzureExtendedASTTransformationEngine
+        
         with open(task.file_path, 'r', encoding='utf-8') as f:
             original_content = f.read()
 
-        # In a real implementation, this would use the extended semantic engine
-        # For simulation, we'll return the content with a service-specific comment
-        return f"# REFACTORED: {service_type}\n{original_content}"
+        # Use the extended semantic engine to transform the code
+        try:
+            # Determine which engine to use based on service type
+            if service_type.startswith('azure_') or 'blob_storage' in service_type or 'cosmos_db' in service_type:
+                # Use Azure extended engine
+                ast_engine = AzureExtendedASTTransformationEngine()
+                semantic_engine = AzureExtendedSemanticRefactoringService(ast_engine)
+            else:
+                # Use AWS extended engine
+                ast_engine = ExtendedASTTransformationEngine()
+                semantic_engine = ExtendedSemanticRefactoringService(ast_engine)
+            
+            # Use LLM to generate transformation recipe if available
+            if self.llm_provider:
+                try:
+                    # Generate refactoring intent using LLM
+                    intent = self.llm_provider.generate_refactoring_intent(
+                        codebase=codebase,
+                        file_path=task.file_path,
+                        target="gcp"
+                    )
+                    
+                    # Create analysis dict for LLM recipe generation
+                    analysis = {
+                        'file_path': task.file_path,
+                        'code': original_content[:2000],  # Limit code size for LLM
+                        'intent': intent,
+                        'target': 'gcp',
+                        'service_type': service_type,
+                        'language': codebase.language.value
+                    }
+                    
+                    # Generate recipe using LLM
+                    llm_recipe_text = self.llm_provider.generate_recipe(analysis)
+                    
+                    # Parse LLM recipe and create structured recipe dict
+                    # The LLM recipe guides which transformations to apply
+                    recipe = {
+                        'operation': 'service_migration',
+                        'service_type': service_type,
+                        'language': codebase.language.value,
+                        'llm_recipe': llm_recipe_text,  # Include LLM guidance
+                        'llm_guided': True  # Flag to indicate LLM was used
+                    }
+                except Exception as llm_error:
+                    # If LLM fails, fall back to rule-based approach
+                    import logging
+                    logging.warning(f"LLM recipe generation failed: {llm_error}, using rule-based transformation")
+                    recipe = {
+                        'operation': 'service_migration',
+                        'service_type': service_type,
+                        'language': codebase.language.value,
+                        'llm_guided': False
+                    }
+            else:
+                # No LLM provider available, use rule-based approach
+                recipe = {
+                    'operation': 'service_migration',
+                    'service_type': service_type,
+                    'language': codebase.language.value,
+                    'llm_guided': False
+                }
+            
+            # Transform the code (AST engine will use regex patterns, guided by LLM recipe if available)
+            transformed_content, variable_mapping = ast_engine.transform_code(
+                original_content,
+                codebase.language.value,
+                recipe
+            )
+            
+            # Store variable mapping in task metadata and collect for summary
+            if variable_mapping:
+                if not hasattr(task, 'metadata'):
+                    task.metadata = {}
+                task.metadata['variable_mapping'] = variable_mapping
+                # Merge into overall mapping (later mappings override earlier ones for same variable)
+                all_variable_mappings.update(variable_mapping)
+            
+            return transformed_content
+            
+        except Exception as e:
+            # If transformation fails, return original with error comment
+            import traceback
+            error_msg = f"# ERROR during transformation: {str(e)}\n# Original code preserved below\n{traceback.format_exc()}\n\n"
+            return error_msg + original_content
 
 
 class CreateRefactoringPlanUseCase:

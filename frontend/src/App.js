@@ -23,7 +23,7 @@ import {
   Divider,
   CircularProgress
 } from '@mui/material';
-import { CloudUpload as CloudUploadIcon, Code as CodeIcon } from '@mui/icons-material';
+import { CloudUpload as CloudUploadIcon, Code as CodeIcon, ContentCopy as ContentCopyIcon, Check as CheckIcon } from '@mui/icons-material';
 import { initiateMigration, getMigrationStatus } from './api/client';
 
 const App = () => {
@@ -34,6 +34,7 @@ const App = () => {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [copiedSection, setCopiedSection] = useState(null);
 
   const supportedServices = [
     { value: 's3', label: 'S3 to Cloud Storage' },
@@ -117,6 +118,31 @@ const App = () => {
     setCode(exampleCode);
   };
 
+  const handleCopyToClipboard = async (text, section) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedSection(section);
+      setTimeout(() => setCopiedSection(null), 2000); // Reset after 2 seconds
+    } catch (err) {
+      console.error('Failed to copy:', err);
+      // Fallback for older browsers
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.opacity = '0';
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand('copy');
+        setCopiedSection(section);
+        setTimeout(() => setCopiedSection(null), 2000);
+      } catch (fallbackErr) {
+        console.error('Fallback copy failed:', fallbackErr);
+      }
+      document.body.removeChild(textArea);
+    }
+  };
+
   return (
     <div>
       <AppBar position="static">
@@ -159,7 +185,15 @@ const App = () => {
                       <Select
                         value={selectedService}
                         label="Service to Migrate"
-                        onChange={(e) => setSelectedService(e.target.value)}
+                        onChange={(e) => {
+                          const serviceValue = e.target.value;
+                          setSelectedService(serviceValue);
+                          // Auto-add service when selected
+                          if (serviceValue && !services.includes(serviceValue)) {
+                            setServices([...services, serviceValue]);
+                            setSelectedService(''); // Reset dropdown
+                          }
+                        }}
                       >
                         {supportedServices.map((service) => (
                           <MuiMenuItem key={service.value} value={service.value}>
@@ -171,6 +205,7 @@ const App = () => {
                     <Button 
                       variant="outlined" 
                       onClick={handleAddService}
+                      disabled={!selectedService || services.includes(selectedService)}
                       sx={{ height: '56px' }}
                     >
                       Add
@@ -203,29 +238,60 @@ const App = () => {
                     </Box>
                   )}
 
-                  <TextField
-                    fullWidth
-                    label="Code to Refactor"
-                    multiline
-                    rows={15}
-                    value={code}
-                    onChange={(e) => setCode(e.target.value)}
-                    variant="outlined"
-                    sx={{ mb: 2 }}
-                  />
+                  <Box sx={{ position: 'relative', mb: 2 }}>
+                    <TextField
+                      fullWidth
+                      label="Code to Refactor"
+                      multiline
+                      rows={15}
+                      value={code}
+                      onChange={(e) => setCode(e.target.value)}
+                      variant="outlined"
+                    />
+                    <Box sx={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 1 }}>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={copiedSection === 'input' ? <CheckIcon /> : <ContentCopyIcon />}
+                        onClick={() => handleCopyToClipboard(code, 'input')}
+                        disabled={!code.trim()}
+                      >
+                        Copy
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        color="error"
+                        onClick={() => setCode('')}
+                        disabled={!code.trim()}
+                      >
+                        Delete
+                      </Button>
+                    </Box>
+                  </Box>
 
                   <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
                     <Button
                       variant="contained"
                       startIcon={<CloudUploadIcon />}
                       onClick={handleMigrate}
-                      disabled={loading || services.length === 0}
+                      disabled={loading || services.length === 0 || !code.trim()}
                       fullWidth
                     >
                       {loading ? 'Migrating...' : 'Migrate to GCP'}
                     </Button>
                     {loading && <CircularProgress size={24} />}
                   </Box>
+                  {services.length === 0 && (
+                    <Alert severity="info" sx={{ mt: 1 }}>
+                      Please select at least one service to migrate from the dropdown above.
+                    </Alert>
+                  )}
+                  {services.length > 0 && !code.trim() && (
+                    <Alert severity="info" sx={{ mt: 1 }}>
+                      Please enter code to refactor in the text area above.
+                    </Alert>
+                  )}
                 </Box>
 
                 {error && (
@@ -698,30 +764,153 @@ with producer:
             </Card>
 
             {result && (
-              <Card sx={{ mt: 3 }}>
-                <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    Migration Result
-                  </Typography>
-                  <Box sx={{ mb: 1 }}>
-                    <Typography variant="body2">Migration ID: {result.migration_id}</Typography>
-                    <Typography variant="body2">Plan ID: {result.plan_id}</Typography>
-                    <Typography variant="body2">Completed at: {new Date(result.completed_at).toLocaleString()}</Typography>
-                    <Typography variant="body2">Verification: {result.verification_result.success ? 'PASSED' : 'FAILED'}</Typography>
-                    <Typography variant="body2">Security Validation: {result.security_validation_passed ? 'PASSED' : 'FAILED'}</Typography>
-                  </Box>
-                  {result.execution_result.service_results && (
-                    <Box>
-                      <Typography variant="subtitle2">Service Migration Results:</Typography>
-                      {Object.entries(result.execution_result.service_results).map(([service, stats]) => (
-                        <Typography key={service} variant="body2">
-                          {service}: {stats.success} successful, {stats.failed} failed
-                        </Typography>
-                      ))}
+              <Grid item xs={12}>
+                <Card sx={{ mt: 3 }}>
+                  <CardContent>
+                    <Typography variant="h6" gutterBottom>
+                      Migration Result
+                    </Typography>
+                    <Box sx={{ mb: 2 }}>
+                      <Typography variant="body2"><strong>Migration ID:</strong> {result.migration_id}</Typography>
+                      <Typography variant="body2"><strong>Plan ID:</strong> {result.plan_id || 'N/A'}</Typography>
+                      <Typography variant="body2"><strong>Completed at:</strong> {result.completed_at ? new Date(result.completed_at).toLocaleString() : 'N/A'}</Typography>
+                      <Typography variant="body2">
+                        <strong>Verification:</strong> 
+                        <span style={{ color: result.verification_result?.success ? 'green' : 'red', marginLeft: '8px' }}>
+                          {result.verification_result?.success ? '✓ PASSED' : '✗ FAILED'}
+                        </span>
+                      </Typography>
+                      <Typography variant="body2">
+                        <strong>Security Validation:</strong> 
+                        <span style={{ color: result.security_validation_passed ? 'green' : 'red', marginLeft: '8px' }}>
+                          {result.security_validation_passed ? '✓ PASSED' : '✗ FAILED'}
+                        </span>
+                      </Typography>
                     </Box>
-                  )}
-                </CardContent>
-              </Card>
+                    
+                    {result.execution_result?.service_results && (
+                      <Box sx={{ mb: 2 }}>
+                        <Typography variant="subtitle2" gutterBottom>Service Migration Results:</Typography>
+                        {Object.entries(result.execution_result.service_results).map(([service, stats]) => (
+                          <Typography key={service} variant="body2" sx={{ ml: 2 }}>
+                            • {service}: {stats.success || 0} successful, {stats.failed || 0} failed
+                          </Typography>
+                        ))}
+                      </Box>
+                    )}
+
+                    {result.refactored_code && (
+                      <Box sx={{ mt: 2 }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Typography variant="subtitle2">Refactored Code:</Typography>
+                          <Box sx={{ display: 'flex', gap: 1 }}>
+                            <Button
+                              size="small"
+                              startIcon={copiedSection === 'refactored' ? <CheckIcon /> : <ContentCopyIcon />}
+                              onClick={() => handleCopyToClipboard(result.refactored_code, 'refactored')}
+                              variant="outlined"
+                              color={copiedSection === 'refactored' ? 'success' : 'primary'}
+                            >
+                              {copiedSection === 'refactored' ? 'Copied!' : 'Copy'}
+                            </Button>
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              color="error"
+                              onClick={() => setResult({...result, refactored_code: null})}
+                            >
+                              Delete
+                            </Button>
+                          </Box>
+                        </Box>
+                        <Paper sx={{ p: 2, bgcolor: '#f5f5f5', maxHeight: 400, overflow: 'auto', position: 'relative' }}>
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                            {result.refactored_code}
+                          </pre>
+                        </Paper>
+                      </Box>
+                    )}
+                    
+                    {result.variable_mapping && Object.keys(result.variable_mapping).length > 0 && (
+                      <Box sx={{ mt: 2 }}>
+                        <Typography variant="subtitle2" gutterBottom>
+                          Variable Name Changes Report:
+                        </Typography>
+                        <Paper sx={{ p: 2, bgcolor: '#e3f2fd', maxHeight: 300, overflow: 'auto' }}>
+                          <Typography variant="body2" component="div">
+                            <strong>Summary:</strong> The following variable names were changed during migration. 
+                            Update these throughout your codebase for consistency.
+                          </Typography>
+                          <Box component="ul" sx={{ mt: 1, pl: 3 }}>
+                            {Object.entries(result.variable_mapping).map(([oldName, newName]) => (
+                              <li key={oldName} style={{ marginBottom: '8px' }}>
+                                <code style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: '3px' }}>
+                                  {oldName}
+                                </code>
+                                {' → '}
+                                <code style={{ backgroundColor: '#fff', padding: '2px 6px', borderRadius: '3px' }}>
+                                  {newName}
+                                </code>
+                              </li>
+                            ))}
+                          </Box>
+                        </Paper>
+                      </Box>
+                    )}
+
+                    {result.code && !result.refactored_code && (
+                      <Box sx={{ mt: 2 }}>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Typography variant="subtitle2">Original Code:</Typography>
+                          <Button
+                            size="small"
+                            startIcon={copiedSection === 'original' ? <CheckIcon /> : <ContentCopyIcon />}
+                            onClick={() => handleCopyToClipboard(result.code, 'original')}
+                            variant="outlined"
+                            color={copiedSection === 'original' ? 'success' : 'primary'}
+                          >
+                            {copiedSection === 'original' ? 'Copied!' : 'Copy Code'}
+                          </Button>
+                        </Box>
+                        <Paper sx={{ p: 2, bgcolor: '#f5f5f5', maxHeight: 400, overflow: 'auto' }}>
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace', fontSize: '0.875rem' }}>
+                            {result.code}
+                          </pre>
+                        </Paper>
+                        <Alert severity="info" sx={{ mt: 1 }}>
+                          Note: Refactored code will appear here once migration completes. Check the migration status for details.
+                        </Alert>
+                      </Box>
+                    )}
+
+                    {result.errors && result.errors.length > 0 && (
+                      <Box sx={{ mt: 2 }}>
+                        <Alert severity="error">
+                          <Typography variant="subtitle2">Errors:</Typography>
+                          <ul style={{ marginTop: '8px', paddingLeft: '20px' }}>
+                            {result.errors.map((error, idx) => (
+                              <li key={idx}>{error}</li>
+                            ))}
+                          </ul>
+                        </Alert>
+                      </Box>
+                    )}
+
+                    {result.warnings && result.warnings.length > 0 && (
+                      <Box sx={{ mt: 2 }}>
+                        <Alert severity="warning">
+                          <Typography variant="subtitle2">Warnings:</Typography>
+                          <ul style={{ marginTop: '8px', paddingLeft: '20px' }}>
+                            {result.warnings.map((warning, idx) => (
+                              <li key={idx}>{warning}</li>
+                            ))}
+                          </ul>
+                        </Alert>
+                      </Box>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
             )}
           </Grid>
         </Grid>

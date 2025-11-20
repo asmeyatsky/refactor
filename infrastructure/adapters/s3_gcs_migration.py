@@ -29,7 +29,7 @@ from infrastructure.repositories import (
 from infrastructure.adapters.verification_security import VerificationAgent, SecurityGate
 from infrastructure.adapters.memory import MemoryModule, ContextManager
 from infrastructure.adapters.semantic_engine import SemanticRefactoringService
-from infrastructure.adapters.extended_semantic_engine import ExtendedSemanticRefactoringService
+from infrastructure.adapters.extended_semantic_engine import ExtendedSemanticRefactoringService, ExtendedASTTransformationEngine
 from infrastructure.adapters.azure_extended_semantic_engine import AzureExtendedSemanticRefactoringService, AzureExtendedASTTransformationEngine
 from infrastructure.adapters.service_mapping import ServiceMapper
 from infrastructure.adapters.azure_mapping import AzureServiceMapper
@@ -124,6 +124,7 @@ class MultiServiceRefactoringEngineAgent:
                 "plan_id": plan_id,
                 "files_transformed": result.transformed_files,
                 "service_results": result.service_results,
+                "variable_mapping": result.variable_mapping if hasattr(result, 'variable_mapping') else {},
                 "errors": result.errors,
                 "warnings": result.warnings
             }
@@ -288,7 +289,8 @@ def create_multi_service_migration_system() -> MultiServiceMigrationOrchestrator
         plan_repo=plan_repo,
         codebase_repo=codebase_repo,
         file_repo=file_repo,
-        test_runner=test_runner
+        test_runner=test_runner,
+        llm_provider=llm_provider  # Pass LLM provider to use case
     )
 
     # Create verification and security components

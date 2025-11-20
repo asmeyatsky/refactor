@@ -25,11 +25,13 @@ class Config:
     BACKUP_STORAGE_PATH: str = os.getenv("BACKUP_STORAGE_PATH", "/tmp/refactor_backups")
     MEMORY_STORAGE_PATH: str = os.getenv("MEMORY_STORAGE_PATH", "/tmp/memory_module")
     
-    # LLM Provider Configuration
-    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "mock")  # mock, openai, anthropic, google
-    OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
-    ANTHROPIC_API_KEY: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
-    GOOGLE_API_KEY: Optional[str] = os.getenv("GOOGLE_API_KEY")
+    # LLM Provider Configuration - Gemini only
+    LLM_PROVIDER: str = os.getenv("LLM_PROVIDER", "gemini").lower()
+    GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
+    
+    # Google Cloud Configuration
+    GCP_PROJECT_ID: str = os.getenv("GCP_PROJECT_ID", "mediahouse-478804")
+    GCP_REGION: str = os.getenv("GCP_REGION", "asia-south1")  # Mumbai
     
     # Test Runner Configuration
     TEST_RUNNER: str = os.getenv("TEST_RUNNER", "pytest")  # pytest, unittest, mock

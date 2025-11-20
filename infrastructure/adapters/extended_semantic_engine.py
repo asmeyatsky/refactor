@@ -28,14 +28,18 @@ class ExtendedASTTransformationEngine:
             'java': ExtendedJavaTransformer(self.service_mapper)  # Simplified implementation
         }
     
-    def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> str:
+    def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> tuple[str, dict]:
         """
         Transform code based on the transformation recipe.
         Ensures the output is syntactically correct.
+        
+        Returns:
+            tuple: (transformed_code, variable_mapping) where variable_mapping is a dict
+                   mapping old variable names to new variable names
         """
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
-        
+
         transformer = self.transformers[language]
         transformed_code = transformer.transform(code, transformation_recipe)
         
@@ -43,7 +47,13 @@ class ExtendedASTTransformationEngine:
         if language == 'python':
             transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
         
-        return transformed_code
+        # Get variable mapping if available
+        variable_mapping = {}
+        if hasattr(transformer, '_variable_mappings'):
+            code_id = id(code)
+            variable_mapping = transformer._variable_mappings.get(code_id, {})
+        
+        return transformed_code, variable_mapping
     
     def _validate_and_fix_syntax(self, code: str, original_code: str = None) -> str:
         """
@@ -162,25 +172,32 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         if operation == 'service_migration' and service_type:
             # Handle specific service migration
             if service_type == 's3_to_gcs':
-                return self._migrate_s3_to_gcs(code)
-            elif service_type == 'lambda_to_cloud_functions':
-                return self._migrate_lambda_to_cloud_functions(code)
-            elif service_type == 'dynamodb_to_firestore':
-                return self._migrate_dynamodb_to_firestore(code)
-            elif service_type == 'sqs_to_pubsub':
-                return self._migrate_sqs_to_pubsub(code)
-            elif service_type == 'sns_to_pubsub':
-                return self._migrate_sns_to_pubsub(code)
-            elif service_type == 'rds_to_cloud_sql':
-                return self._migrate_rds_to_cloud_sql(code)
-            elif service_type == 'cloudwatch_to_monitoring':
-                return self._migrate_cloudwatch_to_monitoring(code)
-            elif service_type == 'apigateway_to_apigee':
-                return self._migrate_apigateway_to_apigee(code)
-            elif service_type == 'eks_to_gke':
-                return self._migrate_eks_to_gke(code)
-            elif service_type == 'fargate_to_cloudrun':
-                return self._migrate_fargate_to_cloudrun(code)
+                transformed_code, var_mapping = self._migrate_s3_to_gcs(code)
+                # Store variable mapping for later retrieval
+                if not hasattr(self, '_variable_mappings'):
+                    self._variable_mappings = {}
+                self._variable_mappings[id(code)] = var_mapping
+                return transformed_code
+            else:
+                # Other service types don't return variable mapping yet
+                if service_type == 'lambda_to_cloud_functions':
+                    return self._migrate_lambda_to_cloud_functions(code)
+                elif service_type == 'dynamodb_to_firestore':
+                    return self._migrate_dynamodb_to_firestore(code)
+                elif service_type == 'sqs_to_pubsub':
+                    return self._migrate_sqs_to_pubsub(code)
+                elif service_type == 'sns_to_pubsub':
+                    return self._migrate_sns_to_pubsub(code)
+                elif service_type == 'rds_to_cloud_sql':
+                    return self._migrate_rds_to_cloud_sql(code)
+                elif service_type == 'cloudwatch_to_monitoring':
+                    return self._migrate_cloudwatch_to_monitoring(code)
+                elif service_type == 'apigateway_to_apigee':
+                    return self._migrate_apigateway_to_apigee(code)
+                elif service_type == 'eks_to_gke':
+                    return self._migrate_eks_to_gke(code)
+                elif service_type == 'fargate_to_cloudrun':
+                    return self._migrate_fargate_to_cloudrun(code)
 
         # If no specific service migration, try to detect and migrate automatically
         return self._auto_detect_and_migrate(code)
@@ -193,7 +210,11 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Check for each service type and apply transformations
         if 'boto3' in result_code and 's3' in result_code.lower():
-            result_code = self._migrate_s3_to_gcs(result_code)
+            result_code, var_mapping = self._migrate_s3_to_gcs(result_code)
+            # Store variable mapping
+            if not hasattr(self, '_variable_mappings'):
+                self._variable_mappings = {}
+            self._variable_mappings[id(result_code)] = var_mapping
         
         if 'boto3' in result_code and 'lambda' in result_code.lower():
             result_code = self._migrate_lambda_to_cloud_functions(result_code)
@@ -224,8 +245,14 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
 
         return result_code
     
-    def _migrate_s3_to_gcs(self, code: str) -> str:
-        """Migrate AWS S3 to Google Cloud Storage with improved structure and variable naming"""
+    def _migrate_s3_to_gcs(self, code: str) -> tuple[str, dict]:
+        """Migrate AWS S3 to Google Cloud Storage with improved structure and variable naming.
+        
+        Returns:
+            tuple: (transformed_code, variable_mapping) where variable_mapping is a dict
+                   mapping old variable names to new variable names
+        """
+        variable_mapping = {}  # Track variable name changes
         # Replace boto3 imports with GCS imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import storage', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import storage', code, flags=re.MULTILINE)
@@ -309,6 +336,19 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # First, capture the original variable name BEFORE replacement
         client_var_match = re.search(r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)', code, flags=re.DOTALL)
         original_client_var = client_var_match.group(1) if client_var_match else None
+        
+        # Track variable mapping
+        if original_client_var and original_client_var != 'gcs_client':
+            variable_mapping[original_client_var] = 'gcs_client'
+        
+        # Also track common S3 variable patterns
+        s3_client_pattern = re.search(r'\bs3_client\b', code)
+        if s3_client_pattern and 's3_client' not in variable_mapping:
+            variable_mapping['s3_client'] = 'gcs_client'
+        
+        s3_pattern = re.search(r'\bs3\b(?=\s*\.)', code)
+        if s3_pattern and 's3' not in variable_mapping:
+            variable_mapping['s3'] = 'gcs_client'
         
         # Replace client instantiation
         code = re.sub(
@@ -488,12 +528,17 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Also handle any other obj references in the loop context
         code = re.sub(r'\bobj\b', 'blob', code)  # Replace obj with blob in loop context
         
-        # Remove AWS S3 comments and replace with GCP comments
+        # Remove ALL AWS/S3 references from comments and replace with GCP comments
         code = re.sub(r'#\s*AWS\s+S3\s+example', '# 🌟 GCP Cloud Storage Example', code, flags=re.IGNORECASE)
         code = re.sub(r'#\s*Upload\s+file\s+to\s+S3', '', code, flags=re.IGNORECASE)
         code = re.sub(r'#\s*Download\s+file\s+from\s+S3', '', code, flags=re.IGNORECASE)
         code = re.sub(r'#\s*List\s+objects\s+in\s+bucket', '', code, flags=re.IGNORECASE)
         code = re.sub(r'#\s*AWS.*?S3.*?', '', code, flags=re.IGNORECASE)
+        # Remove any remaining S3 references in comments
+        code = re.sub(r'#.*?S3.*?', '', code, flags=re.IGNORECASE)
+        code = re.sub(r'#.*?s3.*?', '', code, flags=re.IGNORECASE)
+        # Remove AWS region comments that mention S3
+        code = re.sub(r'#.*?AWS.*?region.*?S3.*?', '', code, flags=re.IGNORECASE)
         
         # Clean up multiple blank lines
         code = re.sub(r'\n{3,}', '\n\n', code)

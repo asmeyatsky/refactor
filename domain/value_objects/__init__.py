@@ -42,6 +42,7 @@ class RefactoringResult:
     errors: list
     warnings: list
     service_results: dict = None  # Results for each service refactored
+    variable_mapping: dict = None  # Variable name changes for propagation
 
 
 @dataclass(frozen=True)
