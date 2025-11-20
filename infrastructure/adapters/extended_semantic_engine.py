@@ -323,19 +323,27 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # But protect the comment text from replacement
         if original_client_var:
             # Replace the variable name everywhere it appears (as a word boundary)
-            # But NOT in comments - protect comment lines first
-            comment_protection = {}
-            comment_pattern = r'#.*'
-            for i, match in enumerate(re.finditer(comment_pattern, code)):
-                placeholder = f'__COMMENT_{i}__'
-                comment_protection[placeholder] = match.group(0)
-                code = code[:match.start()] + placeholder + code[match.end():]
+            # But NOT in comments - protect comment lines first by replacing them temporarily
+            lines = code.split('\n')
+            protected_lines = []
+            comment_map = {}
             
-            # Now do the replacement
-            code = re.sub(rf'\b{re.escape(original_client_var)}\b', 'gcs_client', code)
+            for i, line in enumerate(lines):
+                if line.strip().startswith('#'):
+                    # This is a comment line - protect it
+                    placeholder = f'__COMMENT_LINE_{i}__'
+                    comment_map[placeholder] = line
+                    protected_lines.append(placeholder)
+                else:
+                    protected_lines.append(line)
+            
+            # Join and do replacement
+            protected_code = '\n'.join(protected_lines)
+            protected_code = re.sub(rf'\b{re.escape(original_client_var)}\b', 'gcs_client', protected_code)
             
             # Restore comments
-            for placeholder, comment in comment_protection.items():
+            code = protected_code
+            for placeholder, comment in comment_map.items():
                 code = code.replace(placeholder, comment)
         
         # Also replace common S3 variable names (do this after specific replacement)
