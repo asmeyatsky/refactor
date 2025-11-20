@@ -320,9 +320,23 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Replace ALL references to the original client variable with gcs_client
         # This handles cases like 'client', 's3', 's3_client', etc.
+        # But protect the comment text from replacement
         if original_client_var:
             # Replace the variable name everywhere it appears (as a word boundary)
+            # But NOT in comments - protect comment lines first
+            comment_protection = {}
+            comment_pattern = r'#.*'
+            for i, match in enumerate(re.finditer(comment_pattern, code)):
+                placeholder = f'__COMMENT_{i}__'
+                comment_protection[placeholder] = match.group(0)
+                code = code[:match.start()] + placeholder + code[match.end():]
+            
+            # Now do the replacement
             code = re.sub(rf'\b{re.escape(original_client_var)}\b', 'gcs_client', code)
+            
+            # Restore comments
+            for placeholder, comment in comment_protection.items():
+                code = code.replace(placeholder, comment)
         
         # Also replace common S3 variable names (do this after specific replacement)
         code = re.sub(r'\bs3_client\b', 'gcs_client', code)
