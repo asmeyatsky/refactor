@@ -178,26 +178,29 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
                     self._variable_mappings = {}
                 self._variable_mappings[id(code)] = var_mapping
                 return transformed_code
-            else:
-                # Other service types don't return variable mapping yet
-                if service_type == 'lambda_to_cloud_functions':
-                    return self._migrate_lambda_to_cloud_functions(code)
-                elif service_type == 'dynamodb_to_firestore':
-                    return self._migrate_dynamodb_to_firestore(code)
-                elif service_type == 'sqs_to_pubsub':
-                    return self._migrate_sqs_to_pubsub(code)
-                elif service_type == 'sns_to_pubsub':
-                    return self._migrate_sns_to_pubsub(code)
-                elif service_type == 'rds_to_cloud_sql':
-                    return self._migrate_rds_to_cloud_sql(code)
-                elif service_type == 'cloudwatch_to_monitoring':
-                    return self._migrate_cloudwatch_to_monitoring(code)
-                elif service_type == 'apigateway_to_apigee':
-                    return self._migrate_apigateway_to_apigee(code)
-                elif service_type == 'eks_to_gke':
-                    return self._migrate_eks_to_gke(code)
-                elif service_type == 'fargate_to_cloudrun':
-                    return self._migrate_fargate_to_cloudrun(code)
+            elif service_type == 'lambda_to_cloud_functions':
+                transformed_code, var_mapping = self._migrate_lambda_to_cloud_functions(code)
+                # Store variable mapping
+                if not hasattr(self, '_variable_mappings'):
+                    self._variable_mappings = {}
+                self._variable_mappings[id(code)] = var_mapping
+                return transformed_code
+            elif service_type == 'dynamodb_to_firestore':
+                return self._migrate_dynamodb_to_firestore(code)
+            elif service_type == 'sqs_to_pubsub':
+                return self._migrate_sqs_to_pubsub(code)
+            elif service_type == 'sns_to_pubsub':
+                return self._migrate_sns_to_pubsub(code)
+            elif service_type == 'rds_to_cloud_sql':
+                return self._migrate_rds_to_cloud_sql(code)
+            elif service_type == 'cloudwatch_to_monitoring':
+                return self._migrate_cloudwatch_to_monitoring(code)
+            elif service_type == 'apigateway_to_apigee':
+                return self._migrate_apigateway_to_apigee(code)
+            elif service_type == 'eks_to_gke':
+                return self._migrate_eks_to_gke(code)
+            elif service_type == 'fargate_to_cloudrun':
+                return self._migrate_fargate_to_cloudrun(code)
 
         # If no specific service migration, try to detect and migrate automatically
         return self._auto_detect_and_migrate(code)
@@ -217,7 +220,11 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             self._variable_mappings[id(result_code)] = var_mapping
         
         if 'boto3' in result_code and 'lambda' in result_code.lower():
-            result_code = self._migrate_lambda_to_cloud_functions(result_code)
+            result_code, var_mapping = self._migrate_lambda_to_cloud_functions(result_code)
+            # Store variable mapping
+            if not hasattr(self, '_variable_mappings'):
+                self._variable_mappings = {}
+            self._variable_mappings[id(result_code)] = var_mapping
         
         if 'boto3' in result_code and 'dynamodb' in result_code.lower():
             result_code = self._migrate_dynamodb_to_firestore(result_code)
@@ -769,45 +776,165 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         )
         return code
     
-    def _migrate_lambda_to_cloud_functions(self, code: str) -> str:
-        """Migrate AWS Lambda to Google Cloud Functions"""
-        # Replace Lambda client imports
-        code = re.sub(r'^import boto3\s*$', 'from google.cloud import functions_v1\nimport functions_framework', code, flags=re.MULTILINE)
-        code = re.sub(r'^from boto3', 'from google.cloud import functions_v1\nimport functions_framework', code, flags=re.MULTILINE)
+    def _migrate_lambda_to_cloud_functions(self, code: str) -> tuple[str, dict]:
+        """Migrate AWS Lambda to Google Cloud Functions with proper GCP patterns.
         
-        # Replace Lambda client instantiation
+        Returns:
+            tuple: (transformed_code, variable_mapping) where variable_mapping tracks
+                   variable name changes (lambda_client → gcf_client, etc.)
+        """
+        variable_mapping = {}  # Track variable name changes
+        
+        # Store original code for variable detection
+        original_code = code
+        
+        # Pattern 1: Detect Lambda client variables
+        lambda_client_pattern = r'(\w+)\s*=\s*boto3\.client\([\'\"]lambda[\'\"].*?\)'
+        lambda_matches = re.finditer(lambda_client_pattern, original_code, flags=re.DOTALL)
+        for match in lambda_matches:
+            var_name = match.group(1)
+            if var_name not in variable_mapping:
+                variable_mapping[var_name] = 'gcf_client'
+        
+        # Pattern 2: Common Lambda variable names
+        if re.search(r'\blambda_client\b', original_code):
+            variable_mapping['lambda_client'] = 'gcf_client'
+        if re.search(r'\blambda_function\b', original_code):
+            variable_mapping['lambda_function'] = 'gcf_function'
+        
+        # Replace Lambda client imports with GCP imports
+        code = re.sub(r'^import boto3\s*$', 'import functions_framework\nfrom google.cloud import functions_v2', code, flags=re.MULTILINE)
+        code = re.sub(r'^from boto3', 'import functions_framework\nfrom google.cloud import functions_v2', code, flags=re.MULTILINE)
+        
+        # Apply variable renaming FIRST
+        for old_var, new_var in variable_mapping.items():
+            if old_var != new_var:
+                lines = code.split('\n')
+                renamed_lines = []
+                for line in lines:
+                    if line.strip().startswith('#'):
+                        renamed_lines.append(line)
+                        continue
+                    pattern = rf'\b{re.escape(old_var)}\b(?=\s*[.=\(\)\[\],:]|\s*$)'
+                    protected_line = re.sub(pattern, new_var, line)
+                    renamed_lines.append(protected_line)
+                code = '\n'.join(renamed_lines)
+        
+        # Replace Lambda client instantiation (if still present after renaming)
+        # This should happen AFTER variable renaming, so we match the renamed variable
         code = re.sub(
             r'(\w+)\s*=\s*boto3\.client\([\'\"]lambda[\'\"].*?\)',
-            r'\1 = functions_v1.CloudFunctionsServiceClient()',
+            r'\1 = functions_v2.FunctionServiceClient()  # GCP Cloud Functions client',
             code,
             flags=re.DOTALL
         )
         
-        # Replace Lambda function decorator patterns
+        # Also replace any remaining lambda_client references that weren't caught
+        code = re.sub(r'\blambda_client\b', 'gcf_client', code)
+        
+        # Replace Lambda function handler patterns
+        # Pattern: def lambda_handler(event, context):
+        def replace_lambda_handler(match):
+            return '@functions_framework.http\ndef function_handler(request):\n    """\n    Google Cloud Function HTTP handler.\n    Args:\n        request (flask.Request): The request object.\n    Returns:\n        The response text or JSON.\n    """\n    request_json = request.get_json(silent=True)\n    # Convert AWS Lambda event to GCF request format\n    event = request_json if request_json else {}\n    context = {}  # GCF doesn\'t use context object like Lambda\n    # Original handler code follows:'
+        
         code = re.sub(
-            r'def lambda_handler\(event,\s*context\):',
-            '@functions_framework.http\ndef function_handler(request):',
-            code
+            r'def\s+lambda_handler\s*\(\s*event\s*,\s*context\s*\)\s*:',
+            replace_lambda_handler,
+            code,
+            flags=re.IGNORECASE
         )
         
-        # Replace Lambda invocation calls
-        code = re.sub(
-            r'(\w+)\.invoke\(FunctionName=([^,]+),\s*InvocationType=([^,]+)?,\s*Payload=([^,\)]+)\)',
-            r'# Cloud Functions invocation via HTTP or Pub/Sub\n# Function: \2\n# Payload: \4',
-            code
-        )
+        # Replace Lambda invocation calls with proper GCP HTTP requests
+        # Handle both: response = client.invoke(...) and client.invoke(...)
+        def replace_invoke_assignment(match):
+            # Pattern: response = client.invoke(...)
+            var_name = match.group(1)
+            client_var = match.group(2)
+            function_name = match.group(3).strip('\'"')
+            invocation_type = match.group(4).strip('\'"') if match.group(4) else 'RequestResponse'
+            payload = match.group(5)
+            payload_str = payload.strip()
+            return f'### 🌐 Invoke Cloud Function via HTTP\nimport requests\n# For HTTP-triggered functions, use the function URL\nfunction_url = f"https://{{GCP_REGION}}-{{GCP_PROJECT_ID}}.cloudfunctions.net/{function_name}"\n{var_name} = requests.post(function_url, json={payload_str})\nresult = {var_name}.json() if {var_name}.headers.get(\'content-type\', \'\').startswith(\'application/json\') else {var_name}.text\nprint(f"Function {function_name} invoked: {{result}}")'
         
-        # Replace create_function
-        code = re.sub(
-            r'(\w+)\.create_function\(FunctionName=([^,]+),\s*Runtime=([^,]+),\s*Role=([^,]+),\s*Handler=([^,]+),\s*Code=([^,\)]+)\)',
-            r'# Cloud Functions deployment via gcloud or Cloud Build\n# Function name: \2\n# Runtime: \3\n# Entry point: \5',
-            code
-        )
+        def replace_invoke_direct(match):
+            # Pattern: client.invoke(...)
+            client_var = match.group(1)
+            function_name = match.group(2).strip('\'"')
+            invocation_type = match.group(3).strip('\'"') if match.group(3) else 'RequestResponse'
+            payload = match.group(4)
+            payload_str = payload.strip()
+            return f'### 🌐 Invoke Cloud Function via HTTP\nimport requests\n# For HTTP-triggered functions, use the function URL\nfunction_url = f"https://{{GCP_REGION}}-{{GCP_PROJECT_ID}}.cloudfunctions.net/{function_name}"\nresponse = requests.post(function_url, json={payload_str})\nresult = response.json() if response.headers.get(\'content-type\', \'\').startswith(\'application/json\') else response.text\nprint(f"Function {function_name} invoked: {{result}}")'
+        
+        # Replace Lambda invocation calls - handle multi-line patterns
+        # Use a more robust approach: find all invoke calls first, then replace them
+        # This handles both single-line and multi-line patterns
+        
+        # Pattern for invoke calls (handles multi-line with DOTALL)
+        invoke_pattern = r'(\w+)\s*=\s*(\w+)\.invoke\s*\(\s*FunctionName\s*=\s*([^,]+)\s*,\s*InvocationType\s*=\s*([^,]+)?\s*,\s*Payload\s*=\s*([^\)]+)\s*\)'
+        
+        def replace_invoke_full(match):
+            var_name = match.group(1)
+            function_name = match.group(3).strip('\'"')
+            payload = match.group(5).strip().strip('\'"')
+            # Parse payload - if it's a JSON string, convert it properly
+            if payload.startswith('\'') and payload.endswith('\''):
+                payload = payload[1:-1]  # Remove quotes
+            elif payload.startswith('"') and payload.endswith('"'):
+                payload = payload[1:-1]
+            # Return properly formatted code block
+            return f'### 🌐 Invoke Cloud Function via HTTP\nimport requests\n# For HTTP-triggered functions, use the function URL\nfunction_url = f"https://{{GCP_REGION}}-{{GCP_PROJECT_ID}}.cloudfunctions.net/{function_name}"\n{var_name} = requests.post(function_url, json={payload})\nresult = {var_name}.json() if {var_name}.headers.get(\'content-type\', \'\').startswith(\'application/json\') else {var_name}.text\nprint(f"Function {function_name} invoked: {{result}}")'
+        
+        # Replace multi-line invoke calls
+        code = re.sub(invoke_pattern, replace_invoke_full, code, flags=re.DOTALL)
+        
+        # Also handle direct invoke (without assignment)
+        direct_invoke_pattern = r'(\w+)\.invoke\s*\(\s*FunctionName\s*=\s*([^,]+)\s*,\s*InvocationType\s*=\s*([^,]+)?\s*,\s*Payload\s*=\s*([^\)]+)\s*\)'
+        def replace_invoke_direct_full(match):
+            function_name = match.group(2).strip('\'"')
+            payload = match.group(4).strip().strip('\'"')
+            # Parse payload - if it's a JSON string, convert it properly
+            if payload.startswith('\'') and payload.endswith('\''):
+                payload = payload[1:-1]
+            elif payload.startswith('"') and payload.endswith('"'):
+                payload = payload[1:-1]
+            return f'### 🌐 Invoke Cloud Function via HTTP\nimport requests\n# For HTTP-triggered functions, use the function URL\nfunction_url = f"https://{{GCP_REGION}}-{{GCP_PROJECT_ID}}.cloudfunctions.net/{function_name}"\nresponse = requests.post(function_url, json={payload})\nresult = response.json() if response.headers.get(\'content-type\', \'\').startswith(\'application/json\') else response.text\nprint(f"Function {function_name} invoked: {{result}}")'
+        
+        code = re.sub(direct_invoke_pattern, replace_invoke_direct_full, code, flags=re.DOTALL)
+        
+        # Replace create_function with proper GCP deployment pattern
+        # Use regex with DOTALL to handle multi-line patterns
+        create_function_pattern = r'(\w+)\.create_function\s*\(\s*FunctionName\s*=\s*([^,]+)\s*,\s*Runtime\s*=\s*([^,]+)\s*,\s*Role\s*=\s*([^,]+)\s*,\s*Handler\s*=\s*([^,]+)\s*,\s*Code\s*=\s*([^\)]+)\s*\)'
+        
+        def replace_create_function_full(match):
+            function_name = match.group(2).strip('\'"')
+            runtime = match.group(3).strip('\'"')
+            handler = match.group(5).strip('\'"')
+            return f'### 🚀 Deploy Cloud Function\n# Cloud Functions are deployed via gcloud CLI or Cloud Build\n# Example gcloud command:\n# gcloud functions deploy {function_name} \\\\\n#     --runtime={runtime} \\\\\n#     --trigger=http \\\\\n#     --entry-point={handler} \\\\\n#     --source=.\n#\n# Or use the Cloud Functions client for programmatic deployment:\nfrom google.cloud.functions_v2 import Function, CreateFunctionRequest\ngcf_client = functions_v2.FunctionServiceClient()\n# Note: Full deployment requires Cloud Build setup - see GCP documentation'
+        
+        code = re.sub(create_function_pattern, replace_create_function_full, code, flags=re.DOTALL)
+        
+        # Remove AWS Lambda comments - be more careful to remove entire comment lines
+        code = re.sub(r'#\s*AWS\s+Lambda\s+example.*?\n', '# 🌟 Google Cloud Functions Example\n', code, flags=re.IGNORECASE)
+        # Remove comment lines that contain AWS Lambda references
+        lines = code.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # Skip lines that are only AWS Lambda comments
+            if re.match(r'^\s*#.*?AWS.*?Lambda.*?$', line, re.IGNORECASE):
+                continue
+            # Skip lines that are only Lambda comments (but keep other comments)
+            if re.match(r'^\s*#.*?Lambda.*?$', line, re.IGNORECASE) and 'Cloud Function' not in line:
+                continue
+            cleaned_lines.append(line)
+        code = '\n'.join(cleaned_lines)
+        
+        # Clean up multiple blank lines
+        code = re.sub(r'\n{3,}', '\n\n', code)
         
         # Add exception handling
         code = self._add_exception_handling(code)
         
-        return code
+        return code, variable_mapping
     
     def _migrate_dynamodb_to_firestore(self, code: str) -> str:
         """Migrate AWS DynamoDB to Google Cloud Firestore"""
