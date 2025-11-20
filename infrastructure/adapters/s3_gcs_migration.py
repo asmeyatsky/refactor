@@ -148,16 +148,72 @@ class MultiServiceMigrationOrchestrator:
     def __init__(
         self,
         planner_agent: MultiServicePlannerAgent,
-        refactoring_engine: MultiServiceRefactoringEngineAgent,
         verification_agent: VerificationAgent,
         security_gate: SecurityGate,
-        memory_module: MemoryModule
+        memory_module: MemoryModule,
+        # Dependencies for creating the refactoring engine
+        file_repo: FileRepositoryAdapter,
+        codebase_repo: CodebaseRepositoryAdapter,
+        plan_repo: PlanRepositoryAdapter,
+        llm_provider: LLMProviderAdapter,
+        test_runner: TestRunnerAdapter,
+        semantic_engine: SemanticRefactoringService,
+        extended_semantic_engine: ExtendedSemanticRefactoringService,
+        azure_extended_semantic_engine: AzureExtendedSemanticRefactoringService,
     ):
         self.planner_agent = planner_agent
-        self.refactoring_engine = refactoring_engine
         self.verification_agent = verification_agent
         self.security_gate = security_gate
         self.memory_module = memory_module
+        # Store dependencies
+        self.file_repo = file_repo
+        self.codebase_repo = codebase_repo
+        self.plan_repo = plan_repo
+        self.llm_provider = llm_provider
+        self.test_runner = test_runner
+        self.semantic_engine = semantic_engine
+        self.extended_semantic_engine = extended_semantic_engine
+        self.azure_extended_semantic_engine = azure_extended_semantic_engine
+
+
+    def _create_refactoring_engine(self, services_to_migrate: List[str] = None) -> MultiServiceRefactoringEngineAgent:
+        """Dynamically creates the refactoring engine based on the services to migrate."""
+        aws_services = {"s3", "lambda", "dynamodb"}
+        is_aws = any(service in aws_services for service in (services_to_migrate or []))
+
+        chosen_engine = self.extended_semantic_engine if is_aws else self.azure_extended_semantic_engine
+        
+        refactoring_service = RefactoringDomainService(
+            code_analyzer=CodeAnalyzerAdapter(),
+            llm_provider=self.llm_provider,
+            ast_transformer=ASTTransformationAdapter(),
+            extended_semantic_service=chosen_engine
+        )
+
+        execute_use_case = ExecuteRefactoringPlanUseCase(
+            refactoring_service=refactoring_service,
+            plan_repo=self.plan_repo,
+            codebase_repo=self.codebase_repo,
+            file_repo=self.file_repo,
+            test_runner=self.test_runner
+        )
+
+        execute_multi_service_use_case = ExecuteMultiServiceRefactoringPlanUseCase(
+            refactoring_service=refactoring_service,
+            plan_repo=self.plan_repo,
+            codebase_repo=self.codebase_repo,
+            file_repo=self.file_repo,
+            test_runner=self.test_runner,
+            llm_provider=self.llm_provider
+        )
+
+        return MultiServiceRefactoringEngineAgent(
+            execute_plan_use_case=execute_use_case,
+            execute_multi_service_plan_use_case=execute_multi_service_use_case,
+            semantic_engine=self.semantic_engine,
+            extended_semantic_engine=chosen_engine,
+            memory_module=self.memory_module
+        )
 
     def execute_migration(self, codebase_path: str, language: ProgrammingLanguage, services_to_migrate: List[str] = None) -> Dict[str, Any]:
         """Execute a complete multi-service AWS to GCP migration"""
@@ -176,9 +232,11 @@ class MultiServiceMigrationOrchestrator:
             print(f"Services to migrate: {services_to_migrate}")
         plan = self.planner_agent.create_migration_plan(codebase.id, services_to_migrate)
 
-        # Step 3: Execute the refactoring
+        # Step 3: Create and execute the refactoring
+        print(f"Creating refactoring engine for services: {services_to_migrate}")
+        refactoring_engine = self._create_refactoring_engine(services_to_migrate)
         print(f"Executing multi-service refactoring plan: {plan.id}")
-        execution_result = self.refactoring_engine.execute_migration(plan.id)
+        execution_result = refactoring_engine.execute_migration(plan.id)
 
         # Step 4: Verify the results
         print("Verifying refactoring results...")
@@ -250,49 +308,37 @@ def create_multi_service_migration_system() -> MultiServiceMigrationOrchestrator
         ast_engine=AzureExtendedASTTransformationEngine()
     )
 
-    # Create domain service with extended semantic service
-    refactoring_service = RefactoringDomainService(
+    # Note: RefactoringDomainService and other related components are now created dynamically
+    # inside the orchestrator. We still need a placeholder for the planner.
+    
+    # Create a placeholder refactoring service for the planner
+    # This is a bit of a hack, but it's required for the planner agent to be created.
+    # The planner doesn't actually use the extended_semantic_service, so this is safe.
+    placeholder_refactoring_service = RefactoringDomainService(
         code_analyzer=code_analyzer,
         llm_provider=llm_provider,
         ast_transformer=ast_transformer,
-        extended_semantic_service=azure_extended_semantic_engine  # Use Azure extended engine for broader support
+        extended_semantic_service=extended_semantic_engine 
     )
 
-    # Create application use cases
+    # Create application use cases for the planner
     analyze_use_case = AnalyzeCodebaseUseCase(
         code_analyzer=code_analyzer,
         codebase_repo=codebase_repo
     )
 
     plan_use_case = CreateRefactoringPlanUseCase(
-        refactoring_service=refactoring_service,
+        refactoring_service=placeholder_refactoring_service,
         plan_repo=plan_repo,
         codebase_repo=codebase_repo
     )
 
     multi_service_plan_use_case = CreateMultiServiceRefactoringPlanUseCase(
-        refactoring_service=refactoring_service,
+        refactoring_service=placeholder_refactoring_service,
         plan_repo=plan_repo,
         codebase_repo=codebase_repo
     )
-
-    execute_use_case = ExecuteRefactoringPlanUseCase(
-        refactoring_service=refactoring_service,
-        plan_repo=plan_repo,
-        codebase_repo=codebase_repo,
-        file_repo=file_repo,
-        test_runner=test_runner
-    )
-
-    execute_multi_service_use_case = ExecuteMultiServiceRefactoringPlanUseCase(
-        refactoring_service=refactoring_service,
-        plan_repo=plan_repo,
-        codebase_repo=codebase_repo,
-        file_repo=file_repo,
-        test_runner=test_runner,
-        llm_provider=llm_provider  # Pass LLM provider to use case
-    )
-
+    
     # Create verification and security components
     verification_agent = VerificationAgent(test_runner)
     security_gate = SecurityGate(verification_agent)
@@ -306,21 +352,20 @@ def create_multi_service_migration_system() -> MultiServiceMigrationOrchestrator
         context_manager=context_manager
     )
 
-    refactoring_engine = MultiServiceRefactoringEngineAgent(
-        execute_plan_use_case=execute_use_case,
-        execute_multi_service_plan_use_case=execute_multi_service_use_case,
-        semantic_engine=semantic_engine,
-        extended_semantic_engine=azure_extended_semantic_engine,  # Use Azure extended engine for broader support
-        memory_module=memory_module
-    )
-
     # Create orchestrator
     orchestrator = MultiServiceMigrationOrchestrator(
         planner_agent=planner_agent,
-        refactoring_engine=refactoring_engine,
         verification_agent=verification_agent,
         security_gate=security_gate,
-        memory_module=memory_module
+        memory_module=memory_module,
+        file_repo=file_repo,
+        codebase_repo=codebase_repo,
+        plan_repo=plan_repo,
+        llm_provider=llm_provider,
+        test_runner=test_runner,
+        semantic_engine=semantic_engine,
+        extended_semantic_engine=extended_semantic_engine,
+        azure_extended_semantic_engine=azure_extended_semantic_engine,
     )
 
     return orchestrator
