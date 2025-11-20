@@ -35,13 +35,17 @@ class MemoryModule:
     - Short-term context: current task status, previous failures/lessons learned
     """
     
-    def __init__(self, storage_path: str = "/tmp/memory_module"):
-        self.storage_path = storage_path
+    def __init__(self, storage_path: str = None):
+        try:
+            from config import config
+            self.storage_path = storage_path or config.MEMORY_STORAGE_PATH
+        except ImportError:
+            self.storage_path = storage_path or "/tmp/memory_module"
         self.long_term_storage: Dict[str, MemoryEntry] = {}
         self.short_term_cache: Dict[str, MemoryEntry] = {}
         
         # Create storage directory
-        os.makedirs(storage_path, exist_ok=True)
+        os.makedirs(self.storage_path, exist_ok=True)
         
         # Load any existing long-term memories
         self._load_long_term_memories()

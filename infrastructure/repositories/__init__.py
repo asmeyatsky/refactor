@@ -22,9 +22,13 @@ from domain.ports import (
 class FileRepositoryAdapter(FileRepositoryPort):
     """Implementation of FileRepositoryPort using the local file system"""
     
-    def __init__(self, base_path: str = "/tmp/refactor_backups"):
-        self.base_path = base_path
-        os.makedirs(base_path, exist_ok=True)
+    def __init__(self, base_path: str = None):
+        try:
+            from config import config
+            self.base_path = base_path or config.BACKUP_STORAGE_PATH
+        except ImportError:
+            self.base_path = base_path or "/tmp/refactor_backups"
+        os.makedirs(self.base_path, exist_ok=True)
 
     def read_file(self, file_path: str) -> str:
         """Read content from a file"""
@@ -56,9 +60,13 @@ class FileRepositoryAdapter(FileRepositoryPort):
 class CodebaseRepositoryAdapter(CodebaseRepositoryPort):
     """Implementation of CodebaseRepositoryPort using JSON files for persistence"""
     
-    def __init__(self, storage_path: str = "/tmp/codebases"):
-        self.storage_path = storage_path
-        os.makedirs(storage_path, exist_ok=True)
+    def __init__(self, storage_path: str = None):
+        try:
+            from config import config
+            self.storage_path = storage_path or config.CODEBASE_STORAGE_PATH
+        except ImportError:
+            self.storage_path = storage_path or "/tmp/codebases"
+        os.makedirs(self.storage_path, exist_ok=True)
 
     def save(self, codebase: Codebase) -> None:
         """Save a codebase to JSON file"""
@@ -100,9 +108,13 @@ class CodebaseRepositoryAdapter(CodebaseRepositoryPort):
 class PlanRepositoryAdapter(PlanRepositoryPort):
     """Implementation of PlanRepositoryPort using JSON files for persistence"""
     
-    def __init__(self, storage_path: str = "/tmp/plans"):
-        self.storage_path = storage_path
-        os.makedirs(storage_path, exist_ok=True)
+    def __init__(self, storage_path: str = None):
+        try:
+            from config import config
+            self.storage_path = storage_path or config.PLAN_STORAGE_PATH
+        except ImportError:
+            self.storage_path = storage_path or "/tmp/plans"
+        os.makedirs(self.storage_path, exist_ok=True)
 
     def save(self, plan: RefactoringPlan) -> None:
         """Save a refactoring plan to JSON file"""
