@@ -143,6 +143,47 @@ AWSService.NEW_SERVICE: ServiceMigrationMapping(
 )
 ```
 
+## Contributing to Repository-Level Migration 🆕
+
+The repository-level migration feature is a major enhancement. See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed requirements.
+
+### Key Areas for Contribution
+
+1. **Git Integration**
+   - Repository cloning (GitHub, GitLab, Bitbucket)
+   - Branch management
+   - PR creation and management
+
+2. **Codebase Analysis**
+   - Cross-file dependency graph building
+   - Import/export tracking
+   - Configuration file detection
+
+3. **Migration Assessment Report (MAR)**
+   - Service detection across repository
+   - Change estimation
+   - Risk assessment
+
+4. **Atomic Refactoring**
+   - Multi-file transformation consistency
+   - Cross-file variable/constant propagation
+   - Infrastructure as Code (IaC) updates
+
+5. **Test Integration**
+   - Test execution framework
+   - Test generation for critical paths
+   - Validation reporting
+
+### Implementation Guidelines
+
+When working on repository-level features:
+
+1. **Follow Clean Architecture**: Repository-level features should integrate with existing domain and application layers
+2. **Maintain Backward Compatibility**: File-level migration should continue to work
+3. **Add Comprehensive Tests**: Repository-level features require integration tests
+4. **Document Dependencies**: Update requirements.txt for Git libraries (GitPython, PyGithub, etc.)
+5. **Security First**: Handle credentials securely, use least-privilege principles
+
 ## Adding LLM Provider Support
 
 To add a new LLM provider:
@@ -175,11 +216,66 @@ cd frontend
 npm start
 ```
 
+## Repository-Level Migration Development
+
+### Architecture Considerations
+
+Repository-level migration builds on the existing architecture:
+
+```
+Application Layer (New)
+├── Use Cases
+│   ├── AnalyzeRepositoryUseCase
+│   ├── GenerateMARUseCase
+│   ├── ExecuteRepositoryMigrationUseCase
+│   └── CreatePRUseCase
+
+Infrastructure Layer (New)
+├── Adapters
+│   ├── GitAdapter (GitHub, GitLab, Bitbucket)
+│   ├── DependencyGraphBuilder
+│   ├── MARGenerator
+│   └── PRManager
+└── Repositories
+    └── RepositoryRepositoryAdapter
+```
+
+### Testing Repository-Level Features
+
+```bash
+# Test Git integration
+python -m pytest tests/infrastructure/test_git_adapter.py
+
+# Test dependency graph building
+python -m pytest tests/infrastructure/test_dependency_graph.py
+
+# Test MAR generation
+python -m pytest tests/application/test_mar_generation.py
+
+# Integration test for full repository migration
+python -m pytest tests/integration/test_repository_migration.py
+```
+
+### Git Credentials Setup
+
+For testing Git integration:
+
+```bash
+# Set up GitHub token (read-only for public repos)
+export GITHUB_TOKEN=your_token_here
+
+# Or use SSH keys
+ssh-add ~/.ssh/id_rsa
+```
+
+See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed implementation requirements.
+
 ## Questions?
 
 - Open an issue for bugs or feature requests
 - Check existing issues before creating new ones
 - Be respectful and constructive in discussions
+- For repository-level migration questions, see [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md)
 
 ## License
 

@@ -11,6 +11,7 @@ The Universal Cloud Refactor Agent is an autonomous system designed to automate 
 - **Comprehensive Verification**: Ensures behavioral preservation through testing
 - **Security Validation**: Implements mandatory security checks
 - **Context Management**: Stores and manages information between refactoring tasks
+- **Repository-Level Migration** 🆕: Migrate entire codebases with a single command, including cross-file dependency tracking and atomic PR generation
 
 ## Supported Service Migrations
 
@@ -80,6 +81,39 @@ pip install astor  # For AST transformations
 
 ## Usage
 
+### Repository-Level Migration 🆕
+
+Migrate entire Git repositories with a single command:
+
+```python
+from infrastructure.adapters.repository_migration import RepositoryMigrationEngine
+
+# Initialize repository migration engine
+migration_engine = RepositoryMigrationEngine()
+
+# Migrate entire repository from Git URL
+result = migration_engine.migrate_repository(
+    repository_url="https://github.com/user/repo.git",
+    branch="main",
+    target_cloud="gcp",
+    auto_approve=False  # Generate MAR first for review
+)
+
+# Review Migration Assessment Report (MAR)
+print(f"Services detected: {result['mar']['services_detected']}")
+print(f"Files to modify: {result['mar']['files_affected']}")
+print(f"Estimated changes: {result['mar']['estimated_changes']}")
+
+# Execute migration after review
+if result['mar']['confidence_score'] > 0.8:
+    pr_result = migration_engine.execute_migration(
+        repository_url="https://github.com/user/repo.git",
+        branch="main",
+        migration_plan=result['mar']
+    )
+    print(f"PR created: {pr_result['pr_url']}")
+```
+
 ### Multi-Service Migration
 
 ```python
@@ -134,6 +168,24 @@ print(f"AWS services found: {analysis_report['aws_services_found']}")
 ```
 
 ## Command Line Usage
+
+### Repository-Level Migration 🆕
+
+```bash
+# Migrate entire repository from Git URL
+python main.py --repository https://github.com/user/repo.git --branch main
+
+# Generate Migration Assessment Report (MAR) without executing
+python main.py --repository https://github.com/user/repo.git --mar-only
+
+# Migrate with specific services
+python main.py --repository https://github.com/user/repo.git --services s3 lambda dynamodb
+
+# Auto-approve and create PR
+python main.py --repository https://github.com/user/repo.git --auto-approve
+```
+
+### File/Codebase-Level Migration
 
 ```bash
 # Auto-detect and migrate all supported AWS services
@@ -196,11 +248,29 @@ The system is designed to:
 
 ## Roadmap
 
-- Add Infrastructure as Code (IaC) translation capabilities (CloudFormation to Terraform)
-- Support for additional programming languages
+### Current Capabilities ✅
+- Individual file/snippet refactoring
+- Multi-service migration within codebase
+- Comprehensive AWS & Azure to GCP service mappings
+- AST-powered transformations
+- Test validation framework
+
+### In Development 🔄
+- **Repository-Level Migration**: Migrate entire Git repositories with cross-file dependency tracking
+- **Migration Assessment Report (MAR)**: Pre-migration analysis and planning
+- **Atomic PR Generation**: Single Pull Request with all refactored changes
+- **Git Integration**: Support for GitHub, GitLab, Bitbucket
+
+### Planned Features 📋
+- Infrastructure as Code (IaC) translation capabilities (CloudFormation to Terraform)
+- Support for additional programming languages (Go, Node.js, C#)
 - Container migration (ECS to GKE)
 - Database schema migration capabilities
-- Integration with CI/CD pipelines
+- CI/CD pipeline updates
+- Cross-file dependency mapping and refactoring
+- Automated test generation for refactored code
+
+See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed repository-level migration requirements.
 
 ## Contributing
 

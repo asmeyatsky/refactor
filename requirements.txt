@@ -28,3 +28,18 @@ google-generativeai>=0.3.0
 black>=23.11.0
 flake8>=6.1.0
 mypy>=1.7.0
+
+# Repository-level migration dependencies (optional, for future implementation)
+# Git operations
+# GitPython>=3.1.40
+
+# Git provider APIs
+# PyGithub>=2.1.1          # GitHub
+# python-gitlab>=4.0.0     # GitLab
+# atlassian-python-api>=3.41.0  # Bitbucket
+
+# Dependency analysis
+# networkx>=3.2            # For dependency graphs
+
+# PDF reading (for documentation)
+PyPDF2>=3.0.1

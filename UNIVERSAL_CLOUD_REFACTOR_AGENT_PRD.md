@@ -65,6 +65,9 @@ The Universal Cloud Refactor Agent is the leading platform for automated cloud s
 - **Security Validation**: Implements mandatory security checks
 - **Context Management**: Stores and manages information between refactoring tasks
 - **Web-Based UI**: Intuitive interface for managing migration workflows
+- **Repository-Level Migration** 🆕: Migrate entire Git repositories with cross-file dependency tracking, atomic PR generation, and Migration Assessment Reports (MAR)
+
+> **Note**: See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed requirements on repository-level migration capabilities.
 
 ## 5. Functional Requirements
 
@@ -138,6 +141,20 @@ The Universal Cloud Refactor Agent is the leading platform for automated cloud s
 | FR-041 | System shall provide REST API for programmatic access | High |
 | FR-042 | System shall support authentication for API access | High |
 | FR-043 | System shall provide detailed API documentation | Medium |
+
+### 5.8 Repository-Level Migration 🆕
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-044 | System shall support Git repository cloning from GitHub, GitLab, Bitbucket | High |
+| FR-045 | System shall generate Migration Assessment Report (MAR) before migration | High |
+| FR-046 | System shall build cross-file dependency graphs | High |
+| FR-047 | System shall apply atomic refactoring across entire repository | Critical |
+| FR-048 | System shall generate single Pull Request with all changes | High |
+| FR-049 | System shall update Infrastructure as Code (IaC) files | Medium |
+| FR-050 | System shall execute or generate tests post-migration | High |
+| FR-051 | System shall support rollback via branch deletion | High |
+
+> **Detailed Requirements**: See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for comprehensive repository-level migration specifications.
 
 ## 6. Non-Functional Requirements
 
@@ -277,11 +294,19 @@ The system provides:
 - Enhanced user interface with advanced features
 - Performance optimizations
 
-### 11.4 Phase 4: Enterprise (Months 7-8)
+### 11.4 Phase 4: Repository-Level Migration (Months 7-8)
+- Git integration (GitHub, GitLab, Bitbucket)
+- Repository cloning and analysis
+- Cross-file dependency mapping
+- Migration Assessment Report (MAR) generation
+- Atomic PR generation with all changes
+- Infrastructure as Code (IaC) migration support
+
+### 11.5 Phase 5: Enterprise (Months 9-10)
 - Enterprise features: SSO, audit logs, compliance reports
 - Additional languages: Go, Node.js, C#
-- Infrastructure as Code migration capabilities
 - Advanced security and compliance features
+- Multi-language repository support
 
 ## 12. Dependencies
 
@@ -330,6 +355,13 @@ Detailed mapping tables for each supported service transition are maintained in 
 
 ### 16.2 Security Guidelines
 Security validation procedures and compliance requirements are documented in the security guidelines appendix.
+
+### 16.3 Repository-Level Migration
+Comprehensive requirements for repository-level migration capabilities are documented in [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md), including:
+- User stories for repository migration workflows
+- Functional requirements for Git integration and cross-file refactoring
+- Migration Assessment Report (MAR) specifications
+- Implementation roadmap and open questions
 
 ---
 

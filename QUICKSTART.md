@@ -45,7 +45,23 @@ cd ..
 
 ## Running the Application
 
-### Option 1: Command Line Interface
+### Option 1: Repository-Level Migration 🆕
+
+```bash
+# Migrate entire repository from Git URL
+python main.py --repository https://github.com/user/repo.git --branch main
+
+# Generate Migration Assessment Report (MAR) without executing
+python main.py --repository https://github.com/user/repo.git --mar-only
+
+# Migrate with specific services
+python main.py --repository https://github.com/user/repo.git --services s3 lambda dynamodb
+
+# Auto-approve and create PR
+python main.py --repository https://github.com/user/repo.git --auto-approve
+```
+
+### Option 2: Command Line Interface (File/Codebase-Level)
 
 ```bash
 # Migrate a codebase (auto-detect services)
@@ -58,7 +74,7 @@ python main.py /path/to/your/codebase --language python --services s3 lambda dyn
 python main.py /path/to/your/codebase --language python --verbose
 ```
 
-### Option 2: API Server
+### Option 3: API Server
 
 ```bash
 # Start the API server
@@ -68,7 +84,7 @@ python api_server.py
 # API docs available at http://localhost:8000/docs
 ```
 
-### Option 3: Full Stack (API + Frontend)
+### Option 4: Full Stack (API + Frontend)
 
 **Terminal 1 - API Server:**
 ```bash
@@ -83,7 +99,7 @@ npm start
 
 Visit http://localhost:3000 to use the web interface.
 
-### Option 4: Docker
+### Option 5: Docker
 
 ```bash
 # Build and run with Docker Compose
@@ -123,7 +139,36 @@ python main.py test_codebase --language python --services s3
 
 ## Example Usage
 
-### Python Example
+### Repository-Level Migration Example 🆕
+
+```python
+from infrastructure.adapters.repository_migration import RepositoryMigrationEngine
+
+# Initialize repository migration engine
+migration_engine = RepositoryMigrationEngine()
+
+# Step 1: Generate Migration Assessment Report (MAR)
+mar_result = migration_engine.analyze_repository(
+    repository_url="https://github.com/user/repo.git",
+    branch="main"
+)
+
+print(f"Services detected: {mar_result['services_detected']}")
+print(f"Files to modify: {mar_result['files_affected']}")
+print(f"Confidence score: {mar_result['confidence_score']}")
+
+# Step 2: Execute migration (if confidence is high)
+if mar_result['confidence_score'] > 0.8:
+    pr_result = migration_engine.migrate_repository(
+        repository_url="https://github.com/user/repo.git",
+        branch="main",
+        migration_plan=mar_result
+    )
+    print(f"PR created: {pr_result['pr_url']}")
+    print(f"Branch: {pr_result['branch_name']}")
+```
+
+### File/Codebase-Level Migration Example
 
 ```python
 from infrastructure.adapters.s3_gcs_migration import create_multi_service_migration_system
@@ -223,7 +268,8 @@ Check `REACT_APP_API_BASE_URL` in `.env` matches your API server URL.
 ## Next Steps
 
 - Read the [README.md](README.md) for detailed documentation
-- Check [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
+- Check [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for repository-level migration capabilities
+- Review [CONTRIBUTING.md](CONTRIBUTING.md) to contribute
 - Review [COMPLETENESS_REPORT.md](COMPLETENESS_REPORT.md) for architecture details
 
 ## Support
