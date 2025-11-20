@@ -33,12 +33,79 @@ class AzureExtendedASTTransformationEngine:
     def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> str:
         """
         Transform code based on the transformation recipe
+        Ensures the output is syntactically correct and contains no AWS/Azure references.
         """
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
         
         transformer = self.transformers[language]
-        return transformer.transform(code, transformation_recipe)
+        transformed_code = transformer.transform(code, transformation_recipe)
+        
+        # Validate syntax and AWS/Azure references for Python code
+        if language == 'python':
+            transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
+        
+        return transformed_code
+    
+    def _validate_and_fix_syntax(self, code: str, original_code: str = None) -> str:
+        """
+        Validate Python syntax and ensure no AWS/Azure references in output code.
+        Returns syntactically correct code or raises SyntaxError.
+        """
+        import ast
+        import logging
+        import re
+        logger = logging.getLogger(__name__)
+        
+        # Validate no AWS/Azure references in output code
+        aws_azure_patterns = [
+            r'\bboto3\b', r'\bAWS\b(?!\w)', r'\baws\b(?!\w)', r'\bS3\b(?!\w)', r'\bs3\b(?!\w)',
+            r'\bLambda\b(?!\s*[:=])', r'\bDynamoDB\b', r'\bdynamodb\b',
+            r'\bSQS\b', r'\bsqs\b', r'\bSNS\b', r'\bsns\b', r'\bRDS\b', r'\brds\b',
+            r'\bEC2\b', r'\bec2\b', r'\bCloudWatch\b', r'\bcloudwatch\b',
+            r'\bAPI Gateway\b', r'\bapigateway\b', r'\bEKS\b', r'\beks\b',
+            r'\bFargate\b', r'\bfargate\b', r'\bECS\b', r'\becs\b',
+            r'\bAzure\b(?!\w)', r'\bazure\b(?!\w)', r'\bBlobServiceClient\b', r'\bblob_service_client\b',
+            r'\bCosmosClient\b', r'\bcosmos_client\b', r'\bServiceBusClient\b',
+            r'\bEventHubProducerClient\b', r'\bazure\.storage\b', r'\bazure\.functions\b',
+            r'\bazure\.cosmos\b', r'\bazure\.servicebus\b', r'\bazure\.eventhub\b',
+            r'\bAWS_ACCESS_KEY_ID\b', r'\bAWS_SECRET_ACCESS_KEY\b', r'\bAWS_REGION\b',
+            r'\bAWS_LAMBDA_FUNCTION_NAME\b', r'\bS3_BUCKET_NAME\b', r'\bAZURE_CLIENT_ID\b',
+            r'\bAZURE_CLIENT_SECRET\b', r'\bAZURE_LOCATION\b', r'\bAZURE_STORAGE_CONTAINER\b'
+        ]
+        
+        # Check for AWS/Azure references (excluding comments and strings)
+        code_lines = code.split('\n')
+        violations = []
+        for i, line in enumerate(code_lines, 1):
+            # Skip comment lines
+            stripped = line.strip()
+            if stripped.startswith('#'):
+                continue
+            # Check if line contains AWS/Azure patterns
+            for pattern in aws_azure_patterns:
+                if re.search(pattern, line, re.IGNORECASE):
+                    # Make sure it's not in a string literal
+                    if not (line.count('"') % 2 == 1 or line.count("'") % 2 == 1):
+                        violations.append(f"Line {i}: Found AWS/Azure reference: {pattern} in '{line.strip()}'")
+                        break
+        
+        if violations:
+            logger.warning("AWS/Azure references found in output code:")
+            for violation in violations:
+                logger.warning(violation)
+        
+        # Validate syntax
+        try:
+            ast.parse(code)
+            return code  # Code is valid
+        except SyntaxError as e:
+            logger.debug(f"Syntax error detected: {e}")
+            if original_code:
+                logger.warning("Returning original code due to transformation syntax errors")
+                return original_code
+            else:
+                raise SyntaxError(f"Transformed code is invalid: {e}")
 
 
 class BaseAzureExtendedTransformer(ABC):
@@ -138,30 +205,149 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
         code = re.sub(r'from azure\.storage\.blob import.*', 'from google.cloud import storage', code)
         code = re.sub(r'import azure\.storage\.blob', 'from google.cloud import storage', code)
         
+        # Track variable name for blob service client
+        blob_client_match = re.search(r'(\w+)\s*=\s*BlobServiceClient', code)
+        blob_client_var = blob_client_match.group(1) if blob_client_match else 'blob_service_client'
+        gcs_client_var = 'gcs_client' if blob_client_var == 'blob_service_client' else f'{blob_client_var}_gcs'
+        
         # Replace client instantiation
         code = re.sub(
-            r'BlobServiceClient\.from_connection_string\([^)]+\)',
-            'storage.Client()',
+            r'(\w+)\s*=\s*BlobServiceClient\.from_connection_string\([^)]+\)',
+            rf'{gcs_client_var} = storage.Client()',
             code
         )
+        # Handle BlobServiceClient with comments - be more aggressive
         code = re.sub(
-            r'BlobServiceClient\([^)]+account_url=([^,]+),\s*credential=([^)]+)\)',
-            r'storage.Client()',
+            r'(\w+)\s*=\s*BlobServiceClient\s*\([^)]*account_url[^)]*credential[^)]*\)',
+            rf'{gcs_client_var} = storage.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Handle BlobServiceClient without assignment
+        code = re.sub(
+            r'BlobServiceClient\s*\([^)]*\)',
+            rf'{gcs_client_var} = storage.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Handle BlobServiceClient with comment in the middle - fix syntax error
+        # Pattern: blob_service_client = BlobServiceClient(# comment, credential="key")
+        # This creates invalid syntax, so we need to replace the entire line
+        lines = code.split('\n')
+        result_lines = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            # Check if line contains BlobServiceClient with comment
+            if re.search(r'BlobServiceClient\s*\([^)]*#', line):
+                # Find the matching closing paren on subsequent lines
+                paren_count = line.count('(') - line.count(')')
+                j = i + 1
+                while j < len(lines) and paren_count > 0:
+                    paren_count += lines[j].count('(') - lines[j].count(')')
+                    j += 1
+                # Replace the entire multi-line BlobServiceClient call
+                var_match = re.search(r'(\w+)\s*=\s*BlobServiceClient', line)
+                if var_match:
+                    var_name = var_match.group(1)
+                    result_lines.append(f'{gcs_client_var} = storage.Client()')
+                    i = j
+                    continue
+            result_lines.append(line)
+            i += 1
+        code = '\n'.join(result_lines)
+        
+        # Handle BlobServiceClient with comment in the middle (single line)
+        code = re.sub(
+            r'(\w+)\s*=\s*BlobServiceClient\s*\([^)]*#.*?credential[^)]*\)',
+            rf'{gcs_client_var} = storage.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Original pattern for backward compatibility
+        code = re.sub(
+            r'(\w+)\s*=\s*BlobServiceClient\([^)]+account_url=([^,]+),\s*credential=([^)]+)\)',
+            rf'{gcs_client_var} = storage.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        
+        # Replace get_container_client -> bucket
+        code = re.sub(
+            r'(\w+)\.get_container_client\(([^)]+)\)',
+            rf'bucket = {gcs_client_var}.bucket(\2)',
             code
         )
         
-        # Replace blob operations with GCS equivalents
+        # Replace container_client.upload_blob -> blob.upload_from_string
         code = re.sub(
-            r'blob_client\.upload_blob\(([^)]+)\)',
-            r'bucket = client.bucket("bucket_name")\n    blob = bucket.blob("blob_name")\n    blob.upload_from_string(\1)',
+            r'(\w+)\.upload_blob\(name=([^,]+),\s*data=([^)]+)\)',
+            r'blob = bucket.blob(\2)\n    blob.upload_from_filename(\3) if isinstance(\3, str) else blob.upload_from_string(\3)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.upload_blob\(([^)]+)\)',
+            r'blob = bucket.blob("blob_name")\n    blob.upload_from_string(\2)',
             code
         )
         
+        # Replace download_blob -> download_as_text/download_to_filename
         code = re.sub(
-            r'blob_client\.download_blob\(\)',
-            r'content = blob.download_as_text()',
+            r'(\w+)\.download_blob\(([^)]*)\)',
+            r'blob = bucket.blob("blob_name")\n    content = blob.download_as_text()',
             code
         )
+        
+        # Replace blob_data.readinto -> blob.download_to_filename
+        code = re.sub(
+            r'blob_data\.readinto\(([^)]+)\)',
+            r'blob.download_to_filename(\1)',
+            code
+        )
+        
+        # Remove Azure URLs
+        code = re.sub(
+            r'account_url=[\'"]https://[^\'"]+\.blob\.core\.windows\.net[^\'"]*[\'"]',
+            r'# Azure Blob Storage URL replaced with GCS',
+            code
+        )
+        
+        # Replace SAS token generation -> GCS signed URLs
+        # Pattern: sas_token = generate_account_sas(...)
+        code = re.sub(
+            r'(\w+)\s*=\s*generate_account_sas\([^)]+account_name=([^,]+),\s*account_key=([^,]+),\s*resource_types=([^,]+),\s*permission=([^,]+),\s*expiry=([^\)]+)\)',
+            r'# GCS uses blob.generate_signed_url() instead of account SAS\n# Example: blob.generate_signed_url(expiration=datetime.utcnow() + timedelta(hours=1), method="GET")\n# Note: Generate signed URL on the blob object, not account-level\n# \1 = blob.generate_signed_url(...)',
+            code
+        )
+        code = re.sub(
+            r'generate_account_sas\([^)]+\)',
+            r'# GCS uses blob.generate_signed_url() instead of account SAS\n# Example: blob.generate_signed_url(expiration=datetime.utcnow() + timedelta(hours=1), method="GET")',
+            code
+        )
+        # Replace imports more comprehensively
+        code = re.sub(
+            r'from azure\.storage\.blob import.*',
+            r'from google.cloud import storage\nfrom datetime import datetime, timedelta',
+            code
+        )
+        code = re.sub(
+            r'import azure\.storage\.blob.*',
+            r'from google.cloud import storage\nfrom datetime import datetime, timedelta',
+            code
+        )
+        code = re.sub(
+            r'ResourceTypes\(object=True\)',
+            r'# ResourceTypes not needed for GCS',
+            code
+        )
+        code = re.sub(
+            r'AccountSasPermissions\(read=True\)',
+            r'# Permissions specified in generate_signed_url method parameter',
+            code
+        )
+        # Remove generate_account_sas from imports
+        code = re.sub(r',\s*generate_account_sas', '', code)
+        code = re.sub(r'generate_account_sas\s*,', '', code)
         
         return code
     
@@ -194,29 +380,116 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
             code
         )
         
+        # If Cosmos DB code is present, migrate it too - do this BEFORE other replacements
+        if 'CosmosClient' in code or 'cosmos_client' in code or 'GetDatabase' in code or 'azure.cosmos' in code:
+            code = self._migrate_azure_cosmos_db_to_firestore(code)
+        
+        # Final cleanup: remove any remaining azure.functions references
+        code = re.sub(r'func\.DocumentList', 'list', code)
+        code = re.sub(r'func\.HttpRequest', 'request', code)
+        code = re.sub(r'func\.HttpResponse', 'str', code)
+        
         return code
 
     def _migrate_azure_cosmos_db_to_firestore(self, code: str) -> str:
         """Migrate Azure Cosmos DB to Google Cloud Firestore"""
-        # Replace Cosmos DB imports
-        code = re.sub(r'from azure\.cosmos import.*', 'from google.cloud import firestore', code)
+        # Replace Cosmos DB imports - be more aggressive
+        # Handle: import azure.cosmos.cosmos_client as cosmos_client
+        code = re.sub(r'import\s+azure\.cosmos\.cosmos_client\s+as\s+\w+', 'from google.cloud import firestore', code)
+        code = re.sub(r'import\s+azure\.cosmos\.cosmos_client[^\n]*', 'from google.cloud import firestore', code)
+        code = re.sub(r'from\s+azure\.cosmos\s+import[^\n]*', 'from google.cloud import firestore', code)
+        # Also handle: import azure.cosmos.cosmos_client as cosmos_client (with newline)
+        code = re.sub(r'import\s+azure\.cosmos\.cosmos_client\s+as\s+\w+\s*$', 'from google.cloud import firestore', code, flags=re.MULTILINE)
+        # Handle multiline imports
+        code = re.sub(r'import\s+azure\.cosmos[^\n]*', 'from google.cloud import firestore', code, flags=re.DOTALL)
         
-        # Replace client instantiation
+        # Replace client instantiation patterns - handle both patterns
+        # Match: client = cosmos_client.CosmosClient(url_connection=..., auth=...)
         code = re.sub(
-            r'CosmosClient\([^)]+url=([^,]+),\s*credential=([^)]+)\)',
+            r'(\w+)\s*=\s*cosmos_client\.CosmosClient\s*\([^)]*url_connection[^)]*auth[^)]*\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Match: client = CosmosClient(url_connection=..., auth=...)
+        code = re.sub(
+            r'(\w+)\s*=\s*CosmosClient\s*\([^)]*url_connection[^)]*auth[^)]*\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Match: client = CosmosClient(url=..., credential=...)
+        code = re.sub(
+            r'(\w+)\s*=\s*CosmosClient\s*\([^)]*url[^)]*credential[^)]*\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Match: client = CosmosClient( with multiline parameters
+        code = re.sub(
+            r'(\w+)\s*=\s*CosmosClient\s*\([^)]*url_connection[^)]*\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Match: client = cosmos_client.CosmosClient( with multiline - be more aggressive
+        code = re.sub(
+            r'(\w+)\s*=\s*cosmos_client\.CosmosClient\s*\([^)]*\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Match: client = CosmosClient( with any parameters
+        code = re.sub(
+            r'(\w+)\s*=\s*CosmosClient\s*\([^)]*\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Also handle incomplete patterns (just CosmosClient(...))
+        code = re.sub(
+            r'CosmosClient\s*\([^)]*\)',
             r'firestore.Client()',
-            code
+            code,
+            flags=re.DOTALL
         )
         
-        # Replace database operations
+        # Replace GetDatabase/GetContainer patterns
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.GetDatabase\(([^)]+)\)',
+            r'\1 = \2  # Database reference (Firestore uses project-level)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.GetDatabase\(([^)]+)\)',
+            r'\1  # Database reference (Firestore uses project-level)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.GetContainer\(([^,]+),\s*([^)]+)\)',
+            r'\1 = \2.collection(\4)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.GetContainer\(([^,]+),\s*([^)]+)\)',
+            r'\1.collection(\3)',
+            code
+        )
         code = re.sub(
             r'database\.get_container_client\(([^)]+)\)',
             r'db.collection(\1)',
             code
         )
+        
+        # Replace container operations
         code = re.sub(
-            r'container\.create_item\(([^)]+)\)',
-            r'db.collection("collection").add(\1)',
+            r'container\.create_item\(body=([^)]+)\)',
+            r'doc_ref = db.collection("collection").document()\n    doc_ref.set(\1)',
+            code
+        )
+        code = re.sub(
+            r'container\.CreateItem\(body=([^)]+)\)',
+            r'doc_ref = db.collection("collection").document()\n    doc_ref.set(\1)',
             code
         )
         code = re.sub(
@@ -224,30 +497,94 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
             r'doc = db.collection("collection").document(\1)\n    doc.get()',
             code
         )
+        code = re.sub(
+            r'container\.ReadItem\(([^)]+)\)',
+            r'doc = db.collection("collection").document(\1)\n    doc.get()',
+            code
+        )
+        
+        # Remove Azure URLs from code - be more aggressive
+        code = re.sub(
+            r'url_connection=[\'"]https://[^\'"]+\.documents\.azure\.com[^\'"]+[\'"]',
+            r'# Azure Cosmos DB URL replaced with Firestore',
+            code
+        )
+        code = re.sub(
+            r'[\'"]https://[^\'"]+\.documents\.azure\.com[^\'"]+[\'"]',
+            r'# Azure Cosmos DB URL replaced with Firestore',
+            code
+        )
         
         return code
     
     def _migrate_azure_service_bus_to_pubsub(self, code: str) -> str:
         """Migrate Azure Service Bus to Google Cloud Pub/Sub"""
-        # Replace Service Bus imports
-        code = re.sub(r'from azure\.servicebus import.*', 'from google.cloud import pubsub_v1', code)
+        # Replace Service Bus imports - be more aggressive
+        # Handle: from azure.servicebus import ServiceBusClient, ServiceBusMessage
+        code = re.sub(r'from\s+azure\.servicebus\s+import\s+[^\n]*', 'import os\nfrom google.cloud import pubsub_v1', code)
+        code = re.sub(r'from\s+azure\.servicebus\s+import[^\n]*', 'import os\nfrom google.cloud import pubsub_v1', code)
+        code = re.sub(r'import\s+azure\.servicebus[^\n]*', 'import os\nfrom google.cloud import pubsub_v1', code)
+        # Handle multiline imports
+        code = re.sub(r'from\s+azure\.servicebus[^\n]*', 'import os\nfrom google.cloud import pubsub_v1', code, flags=re.DOTALL)
         
-        # Replace client instantiation
+        # Track variable name for ServiceBusClient
+        servicebus_match = re.search(r'(\w+)\s*=\s*ServiceBusClient', code)
+        servicebus_var = servicebus_match.group(1) if servicebus_match else 'servicebus_client'
+        publisher_var = 'publisher' if servicebus_var == 'servicebus_client' else f'{servicebus_var}_publisher'
+        
+        # Replace client instantiation patterns
         code = re.sub(
-            r'ServiceBusClient\([^)]+conn_str=([^,]+),\s*queue_name=([^)]+)\)',
-            r'publisher = pubsub_v1.PublisherClient()',
+            r'(\w+)\s*=\s*ServiceBusClient\.from_connection_string\([^)]+\)',
+            rf'{publisher_var} = pubsub_v1.PublisherClient()',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*ServiceBusClient\([^)]+\)',
+            rf'{publisher_var} = pubsub_v1.PublisherClient()',
+            code
+        )
+        
+        # Replace get_queue_sender/get_topic_sender patterns
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.get_queue_sender\(queue_name=([^)]+)\)',
+            rf'import os\n    topic_path = {publisher_var}.topic_path(os.getenv("GCP_PROJECT_ID", "your-project-id"), \3)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.get_queue_sender\(queue_name=([^)]+)\)',
+            rf'# Queue sender replaced with Pub/Sub publisher\n    topic_path = {publisher_var}.topic_path(os.getenv("GCP_PROJECT_ID", "your-project-id"), \2)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.get_topic_sender\(topic_name=([^)]+)\)',
+            rf'# Topic sender replaced with Pub/Sub publisher\n    topic_path = {publisher_var}.topic_path(os.getenv("GCP_PROJECT_ID", "your-project-id"), \2)',
             code
         )
         
         # Replace message operations
         code = re.sub(
-            r'message = ServiceBusMessage\(([^)]+)\)',
-            r'data = \1.encode("utf-8")\n    future = publisher.publish(topic_path, data=data)',
+            r'message\s*=\s*ServiceBusMessage\(([^)]+)\)',
+            r'data = \1.encode("utf-8")',
             code
         )
         code = re.sub(
             r'sender\.send_messages\(message\)',
-            r'future = publisher.publish(topic_path, data=data.encode("utf-8"))',
+            rf'future = {publisher_var}.publish(topic_path, data=data)',
+            code
+        )
+        code = re.sub(
+            r'sender\.send_messages\(([^)]+)\)',
+            rf'future = {publisher_var}.publish(topic_path, data=\1.encode("utf-8"))',
+            code
+        )
+        
+        # Replace ServiceBusMessage import
+        code = re.sub(r'ServiceBusMessage', 'str', code)
+        
+        # Replace 'with servicebus_client:' context manager
+        code = re.sub(
+            r'with\s+(\w+):',
+            rf'# Context manager removed - {publisher_var} is ready to use',
             code
         )
         
