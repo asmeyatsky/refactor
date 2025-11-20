@@ -231,29 +231,86 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         code = re.sub(r'^from boto3', 'from google.cloud import storage', code, flags=re.MULTILINE)
         
         # Extract bucket and file names from the code to create named variables
-        bucket_names = set(re.findall(r'[\'\"]([^\'\"]+)[\'\"]', code))
-        # Filter for likely bucket names (simple names without paths)
-        likely_buckets = [b for b in bucket_names if '/' not in b and len(b) < 50]
+        # Try to extract from various S3 operation patterns
+        bucket_names = set()
+        file_names = set()
+        
+        # Extract from upload_file pattern
+        upload_pattern = r'\.upload_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)'
+        upload_matches = re.findall(upload_pattern, code)
+        if upload_matches:
+            bucket_names.add(upload_matches[0][1])
+            file_names.add(upload_matches[0][0])  # local file
+            file_names.add(upload_matches[0][2])   # remote file
+        
+        # Extract from download_file pattern
+        download_pattern = r'\.download_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)'
+        download_matches = re.findall(download_pattern, code)
+        if download_matches:
+            bucket_names.add(download_matches[0][0])
+            file_names.add(download_matches[0][1])  # remote file
+            file_names.add(download_matches[0][2])  # local file
+        
+        # Extract from put_object/get_object/delete_object patterns
+        put_object_pattern = r'\.put_object\(Bucket=([^,]+),\s*Key=([^,]+)'
+        put_matches = re.findall(put_object_pattern, code)
+        if put_matches:
+            bucket_names.add(put_matches[0][0].strip('\'"'))
+            file_names.add(put_matches[0][1].strip('\'"'))
+        
+        get_object_pattern = r'\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)'
+        get_matches = re.findall(get_object_pattern, code)
+        if get_matches:
+            bucket_names.add(get_matches[0][0].strip('\'"'))
+            file_names.add(get_matches[0][1].strip('\'"'))
+        
+        delete_object_pattern = r'\.delete_object\(Bucket=([^,]+),\s*Key=([^,\)]+)'
+        delete_matches = re.findall(delete_object_pattern, code)
+        if delete_matches:
+            bucket_names.add(delete_matches[0][0].strip('\'"'))
+            file_names.add(delete_matches[0][1].strip('\'"'))
+        
+        # Extract from list_objects patterns
+        list_pattern = r'\.list_objects(?:_v2)?\(Bucket=([^,\)]+)'
+        list_matches = re.findall(list_pattern, code)
+        if list_matches:
+            bucket_names.add(list_matches[0].strip('\'"'))
+        
+        # Extract from create_bucket/delete_bucket
+        bucket_pattern = r'\.(?:create|delete)_bucket\(Bucket=([^,\)]+)'
+        bucket_matches = re.findall(bucket_pattern, code)
+        if bucket_matches:
+            bucket_names.add(bucket_matches[0].strip('\'"'))
+        
+        # Filter bucket names (simple names without paths, not Python keywords)
+        likely_buckets = [b for b in bucket_names if '/' not in b and len(b) < 50 and b not in ['s3', 'client', 'storage']]
         bucket_name = likely_buckets[0] if likely_buckets else "my-bucket"
         
-        # Extract file names from upload/download calls
-        upload_pattern = r'\.upload_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)'
-        download_pattern = r'\.download_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)'
+        # Determine file names
+        file_list = list(file_names)
+        local_upload_file = file_list[0] if len(file_list) > 0 else "local_file.txt"
+        remote_file_name = file_list[1] if len(file_list) > 1 else file_list[0] if len(file_list) > 0 else "remote_file.txt"
+        local_download_file = file_list[2] if len(file_list) > 2 else "downloaded_file.txt"
         
-        upload_matches = re.findall(upload_pattern, code)
-        download_matches = re.findall(download_pattern, code)
-        
-        local_upload_file = upload_matches[0][0] if upload_matches else "local_file.txt"
-        bucket_from_upload = upload_matches[0][1] if upload_matches else bucket_name
-        remote_file_name = upload_matches[0][2] if upload_matches else "remote_file.txt"
-        local_download_file = download_matches[0][2] if download_matches else "downloaded_file.txt"
-        
-        # Use the bucket name from upload if found
+        # Use bucket name from first operation found
         if upload_matches:
-            bucket_name = bucket_from_upload
+            bucket_name = upload_matches[0][1]
+        elif download_matches:
+            bucket_name = download_matches[0][0]
+        elif put_matches:
+            bucket_name = put_matches[0][0].strip('\'"')
+        elif get_matches:
+            bucket_name = get_matches[0][0].strip('\'"')
+        elif list_matches:
+            bucket_name = list_matches[0].strip('\'"')
         
         # Replace client instantiation - handle various formats
-        # Change s3_client to gcs_client for better naming
+        # Change ANY variable name to gcs_client for consistency
+        # First, capture the original variable name BEFORE replacement
+        client_var_match = re.search(r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)', code, flags=re.DOTALL)
+        original_client_var = client_var_match.group(1) if client_var_match else None
+        
+        # Replace client instantiation
         code = re.sub(
             r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)',
             r'gcs_client = storage.Client()  # Use a better name for the GCS client',
@@ -261,22 +318,39 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             flags=re.DOTALL
         )
         
-        # Also replace any remaining s3_client references to gcs_client BEFORE transformations
+        # Replace ALL references to the original client variable with gcs_client
+        # This handles cases like 'client', 's3', 's3_client', etc.
+        if original_client_var:
+            # Replace the variable name everywhere it appears (as a word boundary)
+            code = re.sub(rf'\b{re.escape(original_client_var)}\b', 'gcs_client', code)
+        
+        # Also replace common S3 variable names (do this after specific replacement)
         code = re.sub(r'\bs3_client\b', 'gcs_client', code)
+        # Replace standalone 's3' variable when used as a client (followed by dot)
+        # Match: s3.upload_file, s3.put_object, etc. but not 's3' in strings
+        code = re.sub(r'\bs3\b(?=\s*\.)', 'gcs_client', code)
+        
+        # Also handle cases where 's3' might be used without dot (less common but possible)
+        # But be careful - only replace if it's clearly a variable reference
+        # This is a fallback for edge cases
         
         # Add variable definitions after client initialization
         # Find where to insert (after gcs_client line)
         if 'gcs_client = storage.Client()' in code:
             # Insert variable definitions after client
             var_defs = f'\nbucket_name = "{bucket_name}"\nremote_file_name = "{remote_file_name}"\nlocal_upload_file = "{local_upload_file}"\nlocal_download_file = "{local_download_file}"'
-            code = code.replace('gcs_client = storage.Client()  # Use a better name for the GCS client',
-                              f'gcs_client = storage.Client()  # Use a better name for the GCS client{var_defs}')
+            # Replace the client line, preserving any existing comment format
+            code = re.sub(
+                r'gcs_client = storage\.Client\(\)\s*# Use a better name for the GCS client',
+                f'gcs_client = storage.Client()  # Use a better name for the GCS client{var_defs}',
+                code
+            )
         
         # Replace S3 upload_file -> GCS upload_from_filename with improved structure
         # Pattern: s3_client.upload_file('local_file.txt', 'bucket-name', 'remote_file.txt')
+        # Client var should already be gcs_client at this point
         def replace_upload(match):
-            client_var = match.group(1)
-            return f'### 🚀 Upload file to GCS\nbucket = {client_var}.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\nblob.upload_from_filename(local_upload_file)\nprint(f"File {{local_upload_file}} uploaded to gs://{{bucket_name}}/{{remote_file_name}}")'
+            return f'### 🚀 Upload file to GCS\nbucket = gcs_client.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\nblob.upload_from_filename(local_upload_file)\nprint(f"File {{local_upload_file}} uploaded to gs://{{bucket_name}}/{{remote_file_name}}")'
         code = re.sub(
             r'(\w+)\.upload_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
             replace_upload,
@@ -286,32 +360,60 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Replace S3 download_file -> GCS download_to_filename with improved structure
         # Pattern: s3_client.download_file('bucket-name', 'remote_file.txt', 'local_file.txt')
         def replace_download(match):
-            client_var = match.group(1)
-            return f'# ---\n\n### 📥 Download file from GCS\n# The bucket and blob objects can be reused, but shown for clarity\nbucket = {client_var}.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\nblob.download_to_filename(local_download_file)\nprint(f"File gs://{{bucket_name}}/{{remote_file_name}} downloaded to {{local_download_file}}")'
+            return f'# ---\n\n### 📥 Download file from GCS\n# The bucket and blob objects can be reused, but shown for clarity\nbucket = gcs_client.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\nblob.download_to_filename(local_download_file)\nprint(f"File gs://{{bucket_name}}/{{remote_file_name}} downloaded to {{local_download_file}}")'
         code = re.sub(
             r'(\w+)\.download_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
             replace_download,
             code
         )
         
-        # Replace S3 put_object -> GCS upload
+        # Replace S3 put_object -> GCS upload with improved structure
+        # This should happen AFTER client variable replacement
+        def replace_put_object(match):
+            # Client var should already be gcs_client at this point
+            body_expr = match.group(4)
+            return f'### 🚀 Upload file to GCS\nbucket = gcs_client.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\nblob.upload_from_string({body_expr})\nprint(f"File uploaded to gs://{{bucket_name}}/{{remote_file_name}}")'
+        # Match put_object with proper handling of closing paren
         code = re.sub(
-            r'(\w+)\.put_object\(Bucket=([^,]+),\s*Key=([^,]+),\s*Body=([^,\)]+)',
-            r'bucket = \1.bucket(\2)\n    blob = bucket.blob(\3)\n    blob.upload_from_string(\4)',
+            r'(\w+)\.put_object\(Bucket=([^,]+),\s*Key=([^,]+),\s*Body=([^\)]+)\)',
+            replace_put_object,
             code
         )
         
-        # Replace S3 get_object -> GCS download
+        # Replace S3 get_object -> GCS download with improved structure
+        # Handle both: s3.get_object(...) and response = s3.get_object(...)
+        def replace_get_object(match):
+            return f'# ---\n\n### 📥 Download file from GCS\nbucket = gcs_client.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\ncontent = blob.download_as_text()\nprint(f"File gs://{{bucket_name}}/{{remote_file_name}} downloaded")'
+        # Match get_object with optional additional parameters
         code = re.sub(
-            r'(\w+)\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
-            r'bucket = \1.bucket(\2)\n    blob = bucket.blob(\3)\n    content = blob.download_as_text()',
+            r'(\w+)\s*=\s*(\w+)\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)[^\)]*\)',
+            replace_get_object,
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)[^\)]*\)',
+            replace_get_object,
             code
         )
         
-        # Replace S3 delete_object -> GCS delete
+        # Handle response['Body'].read() pattern - replace with blob content
+        code = re.sub(
+            r'(\w+)\[\'Body\'\]\.read\(\)',
+            r'content',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\["Body"\]\.read\(\)',
+            r'content',
+            code
+        )
+        
+        # Replace S3 delete_object -> GCS delete with improved structure
+        def replace_delete_object(match):
+            return f'# ---\n\n### 🗑️ Delete object from GCS\nbucket = gcs_client.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\nblob.delete()\nprint(f"Object gs://{{bucket_name}}/{{remote_file_name}} deleted")'
         code = re.sub(
             r'(\w+)\.delete_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
-            r'bucket = \1.bucket(\2)\n    blob = bucket.blob(\3)\n    blob.delete()',
+            replace_delete_object,
             code
         )
         
@@ -319,12 +421,8 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Pattern: response = s3_client.list_objects_v2(Bucket='my-bucket')
         # Should become: blobs = gcs_client.list_blobs(bucket_name)
         def replace_list_objects_v2(match):
-            # Handle both patterns: response = client.list_objects_v2(...) and client.list_objects_v2(...)
-            if len(match.groups()) >= 2:
-                client_var = match.group(2)
-            else:
-                client_var = match.group(1)
-            return f'# ---\n\n### 📜 List objects (Blobs) in bucket\nprint(f\"\\nObjects in bucket {{bucket_name}}:\")\n# The list_blobs() method returns an iterable of Blob objects\nblobs = {client_var}.list_blobs(bucket_name)'
+            # Client var should already be gcs_client at this point
+            return f'# ---\n\n### 📜 List objects (Blobs) in bucket\nprint(f\"\\nObjects in bucket {{bucket_name}}:\")\n# The list_blobs() method returns an iterable of Blob objects\nblobs = gcs_client.list_blobs(bucket_name)'
         
         code = re.sub(
             r'(\w+)\s*=\s*(\w+)\.list_objects_v2\(Bucket=([^,\)]+)\)',
@@ -405,22 +503,26 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             code
         )
         
-        # Replace S3 create_bucket -> GCS create_bucket
+        # Replace S3 create_bucket -> GCS create_bucket with improved structure
+        def replace_create_bucket(match):
+            return f'### 🆕 Create bucket in GCS\nbucket = gcs_client.create_bucket(bucket_name)\nprint(f"Bucket gs://{{bucket_name}} created")'
         code = re.sub(
             r'(\w+)\.create_bucket\(Bucket=([^,]+)(?:,\s*CreateBucketConfiguration=[^\)]+)?\)',
-            r'\1.create_bucket(\2)',
+            replace_create_bucket,
             code
         )
         code = re.sub(
             r'(\w+)\.create_bucket\(Bucket=([^,\)]+)\)',
-            r'\1.create_bucket(\2)',
+            replace_create_bucket,
             code
         )
         
-        # Replace S3 delete_bucket -> GCS delete_bucket
+        # Replace S3 delete_bucket -> GCS delete_bucket with improved structure
+        def replace_delete_bucket(match):
+            return f'# ---\n\n### 🗑️ Delete bucket from GCS\nbucket = gcs_client.bucket(bucket_name)\nbucket.delete()\nprint(f"Bucket gs://{{bucket_name}} deleted")'
         code = re.sub(
             r'(\w+)\.delete_bucket\(Bucket=([^,\)]+)\)',
-            r'bucket = \1.bucket(\2)\n    bucket.delete()',
+            replace_delete_bucket,
             code
         )
         
