@@ -133,12 +133,10 @@ class CodeAnalyzerAdapter(CodeAnalyzerPort):
 
 class LLMProviderAdapter(LLMProviderPort):
     """
-    Implementation of LLMProviderPort with support for multiple LLM providers
+    Implementation of LLMProviderPort with Gemini support
     
-    Supports:
-    - OpenAI (if OPENAI_API_KEY is set)
-    - Anthropic (if ANTHROPIC_API_KEY is set)
-    - Mock/fallback mode for testing
+    Uses Google Gemini for all LLM operations.
+    Falls back to mock mode if Gemini API key is not configured.
     """
     
     def __init__(self):
@@ -146,30 +144,87 @@ class LLMProviderAdapter(LLMProviderPort):
         self._init_provider()
     
     def _init_provider(self):
-        """Initialize the LLM provider based on configuration"""
-        if self.provider == "openai" and config.OPENAI_API_KEY:
+        """Initialize the Gemini LLM provider"""
+        if self.provider == "gemini" and config.GEMINI_API_KEY:
             try:
-                import openai
-                self.client = openai.OpenAI(api_key=config.OPENAI_API_KEY)
-                self.provider_type = "openai"
-                logger.info("Initialized OpenAI LLM provider")
+                import google.generativeai as genai
+                genai.configure(api_key=config.GEMINI_API_KEY)
+                # Use gemini-2.5-flash for fast, cost-effective responses
+                # Alternative: models/gemini-pro-latest or models/gemini-2.5-pro for better quality
+                self.client = genai.GenerativeModel('models/gemini-2.5-flash')
+                self.provider_type = "gemini"
+                logger.info("Initialized Google Gemini LLM provider (using gemini-2.5-flash)")
             except ImportError:
-                logger.warning("OpenAI package not installed, falling back to mock")
+                logger.warning("google-generativeai package not installed, falling back to mock")
                 self.provider_type = "mock"
-        elif self.provider == "anthropic" and config.ANTHROPIC_API_KEY:
-            try:
-                import anthropic
-                self.client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-                self.provider_type = "anthropic"
-                logger.info("Initialized Anthropic LLM provider")
-            except ImportError:
-                logger.warning("Anthropic package not installed, falling back to mock")
+            except Exception as e:
+                logger.error(f"Failed to initialize Gemini: {e}, falling back to mock")
                 self.provider_type = "mock"
         else:
             self.provider_type = "mock"
-            logger.info("Using mock LLM provider (set LLM_PROVIDER and API keys to use real LLM)")
+            if not config.GEMINI_API_KEY:
+                logger.info("Using mock LLM provider (set GEMINI_API_KEY to use Gemini)")
+            else:
+                logger.info("Using mock LLM provider (set LLM_PROVIDER=gemini to use Gemini)")
     
     def generate_refactoring_intent(self, codebase: Codebase, file_path: str, target: str) -> str:
+        """Generate refactoring intent using Gemini"""
+        if self.provider_type == "gemini":
+            return self._generate_intent_with_gemini(codebase, file_path, target)
+        else:
+            return self._generate_mock_intent(codebase, file_path, target)
+    
+    def _generate_intent_with_gemini(self, codebase: Codebase, file_path: str, target: str) -> str:
+        """Generate refactoring intent using Google Gemini"""
+        try:
+            import google.generativeai as genai
+            
+            # Read file content if possible
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    file_content = f.read()[:2000]  # Limit size
+            except:
+                file_content = "Unable to read file content"
+            
+            prompt = f"""Analyze the following code file and determine the refactoring intent for migrating to {target}.
+
+File: {file_path}
+Language: {codebase.language.value}
+
+Code:
+```{codebase.language.value}
+{file_content}
+```
+
+Provide a concise summary of:
+1. What cloud services are being used (AWS S3, Azure Blob Storage, etc.)
+2. What needs to be migrated to {target}
+3. Key transformation points in the code
+
+Keep the response focused and actionable."""
+
+            # Generate content using Gemini
+            response = self.client.generate_content(
+                prompt,
+                generation_config=genai.types.GenerationConfig(
+                    temperature=0.2,
+                    max_output_tokens=500,
+                )
+            )
+            
+            # Proper response parsing with validation
+            output = self._extract_and_validate_response(response)
+            if output:
+                return output
+            else:
+                logger.warning("Failed to extract valid response from Gemini, using mock")
+                return self._generate_mock_intent(codebase, file_path, target)
+                
+        except Exception as e:
+            logger.error(f"Gemini intent generation error: {e}, using mock")
+            return self._generate_mock_intent(codebase, file_path, target)
+    
+    def _generate_refactoring_intent_legacy(self, codebase: Codebase, file_path: str, target: str) -> str:
         """Generate refactoring intent for a specific file"""
         if self.provider_type == "openai":
             return self._generate_with_openai(codebase, file_path, target)
@@ -259,53 +314,77 @@ Generate a detailed refactoring intent that includes:
         """
     
     def generate_recipe(self, analysis: Dict[str, Any]) -> str:
-        """Generate OpenRewrite recipe based on analysis"""
-        if self.provider_type == "openai":
-            return self._generate_recipe_with_openai(analysis)
-        elif self.provider_type == "anthropic":
-            return self._generate_recipe_with_anthropic(analysis)
+        """Generate transformation recipe based on analysis using Gemini"""
+        if self.provider_type == "gemini":
+            return self._generate_recipe_with_gemini(analysis)
         else:
             return self._generate_mock_recipe(analysis)
     
-    def _generate_recipe_with_openai(self, analysis: Dict[str, Any]) -> str:
-        """Generate recipe using OpenAI"""
+    def _generate_recipe_with_gemini(self, analysis: Dict[str, Any]) -> str:
+        """Generate recipe using Google Gemini"""
         try:
-            prompt = f"""Generate a detailed refactoring recipe for the following analysis:
-
-{analysis}
-
-Create a step-by-step recipe that can be used to transform the code."""
+            import google.generativeai as genai
             
-            response = self.client.chat.completions.create(
-                model="gpt-4",
-                messages=[
-                    {"role": "system", "content": "You are an expert code refactoring engineer."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            logger.error(f"OpenAI API error: {e}, falling back to mock")
+            # Build comprehensive prompt for code transformation
+            code_snippet = analysis.get('code', '')[:3000]  # Limit code size
+            service_type = analysis.get('service_type', 'unknown')
+            language = analysis.get('language', 'python')
+            target = analysis.get('target', 'gcp')
+            
+            prompt = f"""You are an expert code refactoring engineer specializing in cloud service migrations.
+
+TASK: Generate a detailed transformation recipe for migrating AWS/Azure code to Google Cloud Platform (GCP).
+
+Code to transform:
+```{language}
+{code_snippet}
+```
+
+Service Type: {service_type}
+Target Platform: {target}
+Language: {language}
+
+CRITICAL REQUIREMENTS:
+1. Generate ONLY syntactically correct Python code
+2. Use proper indentation (exactly 4 spaces per level, no tabs)
+3. All code must be executable and valid Python syntax
+4. Include specific import statements to replace (e.g., boto3 → google.cloud.storage)
+5. Provide client initialization patterns to transform
+6. Map API method calls (e.g., s3.upload_file → blob.upload_from_filename)
+7. Update exception handling (e.g., botocore.exceptions → google.api_core.exceptions)
+8. Update configuration parameters (e.g., AWS regions → GCP regions)
+9. Handle edge cases and special considerations
+
+IMPORTANT: The output must be valid Python code that can be executed without syntax errors.
+Be specific and provide exact patterns to match and their replacements."""
+
+            # Generate recipe using Gemini with retry logic for syntax validation
+            max_retries = 3
+            for attempt in range(max_retries):
+                response = self.client.generate_content(
+                    prompt,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.2 if attempt == 0 else 0.1,  # Lower temp on retry
+                        max_output_tokens=2000,
+                        top_p=0.95,
+                    )
+                )
+                
+                # Extract and validate response
+                output = self._extract_and_validate_response(response, is_code=True)
+                if output:
+                    return output
+                else:
+                    logger.warning(f"Gemini response validation failed (attempt {attempt + 1}/{max_retries})")
+                    if attempt < max_retries - 1:
+                        # Enhance prompt for retry
+                        prompt = self._enhance_prompt_for_retry(prompt, attempt)
+            
+            logger.error("All Gemini retry attempts failed, falling back to mock")
             return self._generate_mock_recipe(analysis)
-    
-    def _generate_recipe_with_anthropic(self, analysis: Dict[str, Any]) -> str:
-        """Generate recipe using Anthropic"""
-        try:
-            prompt = f"""Generate a detailed refactoring recipe for the following analysis:
-
-{analysis}
-
-Create a step-by-step recipe that can be used to transform the code."""
-            
-            message = self.client.messages.create(
-                model="claude-3-opus-20240229",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": prompt}]
-            )
-            return message.content[0].text
+                
         except Exception as e:
-            logger.error(f"Anthropic API error: {e}, falling back to mock")
+            logger.error(f"Gemini API error: {e}, falling back to mock")
             return self._generate_mock_recipe(analysis)
     
     def _generate_mock_recipe(self, analysis: Dict[str, Any]) -> str:
@@ -323,6 +402,84 @@ Create a step-by-step recipe that can be used to transform the code."""
         5. Update configuration parameters
         6. Verify transformations preserve functionality
         """
+    
+    def _extract_and_validate_response(self, response, is_code: bool = False) -> Optional[str]:
+        """
+        Extract text from Gemini response and validate syntax if it's code.
+        Returns None if validation fails or response is invalid.
+        """
+        import ast
+        
+        try:
+            # Check response structure
+            if not response or not response.candidates:
+                logger.warning("Gemini response has no candidates")
+                return None
+            
+            candidate = response.candidates[0]
+            
+            # Check finish_reason
+            finish_reason = getattr(candidate, 'finish_reason', None)
+            if finish_reason and finish_reason != 1:  # 1 = STOP (success)
+                logger.warning(f"Gemini finish_reason: {finish_reason} (1=STOP, 2=MAX_TOKENS, 3=SAFETY, etc.)")
+                if finish_reason == 2:  # MAX_TOKENS - response truncated
+                    logger.warning("Response truncated due to max_output_tokens limit")
+                elif finish_reason == 3:  # SAFETY - content blocked
+                    logger.error("Response blocked by safety filters")
+                    return None
+            
+            # Extract text from response
+            if candidate.content and candidate.content.parts:
+                text = candidate.content.parts[0].text
+            elif hasattr(response, 'text') and response.text:
+                text = response.text
+            else:
+                logger.warning("No text found in Gemini response")
+                return None
+            
+            if not text or not text.strip():
+                return None
+            
+            # Extract code from markdown if present
+            if "```python" in text:
+                text = text.split("```python")[1].split("```")[0].strip()
+            elif "```" in text:
+                # Try to extract from generic code block
+                parts = text.split("```")
+                if len(parts) >= 3:
+                    text = parts[1].split("\n", 1)[1] if "\n" in parts[1] else parts[1]
+                    text = text.rsplit("```", 1)[0].strip()
+            
+            # Validate syntax if it's code
+            if is_code:
+                try:
+                    # Try to parse as Python code
+                    ast.parse(text)
+                    logger.debug("Generated code passed syntax validation")
+                except SyntaxError as e:
+                    logger.error(f"Generated code has syntax error: {e}")
+                    logger.debug(f"Invalid code snippet:\n{text[:500]}")
+                    return None
+            
+            return text
+            
+        except Exception as e:
+            logger.error(f"Error extracting/validating Gemini response: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return None
+    
+    def _enhance_prompt_for_retry(self, original_prompt: str, attempt: int) -> str:
+        """Enhance prompt with stricter requirements on retry"""
+        enhancement = """
+        
+CRITICAL: The previous response had syntax errors. Please ensure:
+1. All Python code is syntactically correct
+2. Proper indentation (4 spaces per level)
+3. No malformed assignments or statements
+4. Complete, executable code only"""
+        
+        return original_prompt + enhancement
     
 
 class ASTTransformationAdapter(ASTTransformationPort):
