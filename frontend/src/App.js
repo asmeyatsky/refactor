@@ -23,7 +23,7 @@ import {
   Divider,
   CircularProgress
 } from '@mui/material';
-import { CloudUpload as CloudUploadIcon, Code as CodeIcon, ContentCopy as ContentCopyIcon, Check as CheckIcon } from '@mui/icons-material';
+import { CloudUpload as CloudUploadIcon, Code as CodeIcon, ContentCopy as ContentCopyIcon, Check as CheckIcon, Download as DownloadIcon } from '@mui/icons-material';
 import { initiateMigration, getMigrationStatus } from './api/client';
 
 const App = () => {
@@ -833,13 +833,65 @@ with producer:
                     
                     {result.variable_mapping && Object.keys(result.variable_mapping).length > 0 && (
                       <Box sx={{ mt: 2 }}>
-                        <Typography variant="subtitle2" gutterBottom>
-                          Variable Name Changes Report:
-                        </Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                          <Typography variant="subtitle2">
+                            Variable Name Changes Report:
+                          </Typography>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<DownloadIcon />}
+                            onClick={() => {
+                              // Create downloadable JSON file
+                              const mappingData = {
+                                summary: "Variable name changes for GCP migration",
+                                timestamp: new Date().toISOString(),
+                                changes: Object.entries(result.variable_mapping).map(([oldName, newName]) => ({
+                                  old_name: oldName,
+                                  new_name: newName,
+                                  reason: "Renamed for GCP compatibility"
+                                }))
+                              };
+                              
+                              // Create JSON blob
+                              const jsonBlob = new Blob([JSON.stringify(mappingData, null, 2)], { type: 'application/json' });
+                              const url = URL.createObjectURL(jsonBlob);
+                              const link = document.createElement('a');
+                              link.href = url;
+                              link.download = `variable_mapping_${new Date().toISOString().split('T')[0]}.json`;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                              URL.revokeObjectURL(url);
+                              
+                              // Also create CSV version
+                              const csvRows = [
+                                ['Old Variable Name', 'New Variable Name', 'Reason'],
+                                ...Object.entries(result.variable_mapping).map(([oldName, newName]) => [
+                                  oldName,
+                                  newName,
+                                  'Renamed for GCP compatibility'
+                                ])
+                              ];
+                              const csvContent = csvRows.map(row => row.join(',')).join('\n');
+                              const csvBlob = new Blob([csvContent], { type: 'text/csv' });
+                              const csvUrl = URL.createObjectURL(csvBlob);
+                              const csvLink = document.createElement('a');
+                              csvLink.href = csvUrl;
+                              csvLink.download = `variable_mapping_${new Date().toISOString().split('T')[0]}.csv`;
+                              document.body.appendChild(csvLink);
+                              csvLink.click();
+                              document.body.removeChild(csvLink);
+                              URL.revokeObjectURL(csvUrl);
+                            }}
+                          >
+                            Download Mapping
+                          </Button>
+                        </Box>
                         <Paper sx={{ p: 2, bgcolor: '#e3f2fd', maxHeight: 300, overflow: 'auto' }}>
                           <Typography variant="body2" component="div">
-                            <strong>Summary:</strong> The following variable names were changed during migration. 
-                            Update these throughout your codebase for consistency.
+                            <strong>Summary:</strong> All AWS-related variables have been renamed to GCP-friendly names. 
+                            Download the mapping file to update these throughout your codebase.
                           </Typography>
                           <Box component="ul" sx={{ mt: 1, pl: 3 }}>
                             {Object.entries(result.variable_mapping).map(([oldName, newName]) => (

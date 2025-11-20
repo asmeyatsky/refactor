@@ -252,7 +252,50 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             tuple: (transformed_code, variable_mapping) where variable_mapping is a dict
                    mapping old variable names to new variable names
         """
-        variable_mapping = {}  # Track variable name changes
+        variable_mapping = {}  # Track ALL variable name changes for GCP-friendly naming
+        
+        # First pass: Identify ALL AWS-related variables BEFORE any transformation
+        # Store original code for variable detection
+        original_code = code
+        
+        # Pattern 1: Client variables (s3, s3_client, client when used with boto3.client('s3'))
+        client_pattern = r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)'
+        client_matches = re.finditer(client_pattern, original_code, flags=re.DOTALL)
+        for match in client_matches:
+            var_name = match.group(1)
+            if var_name not in variable_mapping:
+                variable_mapping[var_name] = 'gcs_client'
+        
+        # Pattern 2: Response variables from S3 list operations
+        response_pattern = r'(\w+)\s*=\s*(\w+)\.list_objects(?:_v2)?\('
+        response_matches = re.finditer(response_pattern, original_code)
+        for match in response_matches:
+            response_var = match.group(1)
+            client_var = match.group(2)
+            # Only track if the client variable is an S3 client
+            if (client_var in variable_mapping or 's3' in client_var.lower() or 
+                re.search(rf'\b{re.escape(client_var)}\s*=\s*boto3\.client', original_code)):
+                if response_var not in variable_mapping and response_var not in ['blobs', 'bucket']:
+                    # Rename typical response variable names
+                    if response_var in ['response', 'result', 'objects', 'items', 'list_result']:
+                        variable_mapping[response_var] = 'blobs'
+        
+        # Pattern 3: Common AWS variable names (s3_bucket, s3_key, s3_object, etc.)
+        if re.search(r'\bs3_bucket\b', original_code):
+            variable_mapping['s3_bucket'] = 'gcs_bucket'
+        if re.search(r'\bs3_key\b', original_code):
+            variable_mapping['s3_key'] = 'blob_name'
+        if re.search(r'\bs3_object\b', original_code):
+            variable_mapping['s3_object'] = 'blob'
+        if re.search(r'\bs3_client\b', original_code):
+            variable_mapping['s3_client'] = 'gcs_client'
+        if re.search(r'\bs3\b(?=\s*\.)', original_code):
+            variable_mapping['s3'] = 'gcs_client'
+        
+        # Pattern 4: Loop variables (obj in S3 contexts)
+        if re.search(r'for\s+obj\s+in', original_code):
+            variable_mapping['obj'] = 'blob'
+        
         # Replace boto3 imports with GCS imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import storage', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import storage', code, flags=re.MULTILINE)
@@ -337,54 +380,56 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         client_var_match = re.search(r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)', code, flags=re.DOTALL)
         original_client_var = client_var_match.group(1) if client_var_match else None
         
-        # Track variable mapping
+        # Track ALL variable mappings for comprehensive renaming
         if original_client_var and original_client_var != 'gcs_client':
             variable_mapping[original_client_var] = 'gcs_client'
         
-        # Also track common S3 variable patterns
-        s3_client_pattern = re.search(r'\bs3_client\b', code)
-        if s3_client_pattern and 's3_client' not in variable_mapping:
+        # Track common S3 variable patterns
+        if 's3_client' in code and 's3_client' not in variable_mapping:
             variable_mapping['s3_client'] = 'gcs_client'
         
-        s3_pattern = re.search(r'\bs3\b(?=\s*\.)', code)
-        if s3_pattern and 's3' not in variable_mapping:
+        if re.search(r'\bs3\b(?=\s*\.)', code) and 's3' not in variable_mapping:
             variable_mapping['s3'] = 'gcs_client'
         
-        # Replace client instantiation
+        # Track other AWS-specific variable names
+        if 's3_bucket' in code and 's3_bucket' not in variable_mapping:
+            variable_mapping['s3_bucket'] = 'gcs_bucket'
+        
+        if 's3_key' in code and 's3_key' not in variable_mapping:
+            variable_mapping['s3_key'] = 'blob_name'
+        
+        if 's3_object' in code and 's3_object' not in variable_mapping:
+            variable_mapping['s3_object'] = 'blob'
+        
+        # Apply comprehensive variable renaming FIRST (before transformations)
+        # This ensures all AWS variables are renamed to GCP-friendly names
+        for old_var, new_var in variable_mapping.items():
+            if old_var != new_var:
+                # Use word boundaries to avoid partial matches
+                # Protect comments and strings
+                lines = code.split('\n')
+                renamed_lines = []
+                for line in lines:
+                    # Skip comment lines
+                    if line.strip().startswith('#'):
+                        renamed_lines.append(line)
+                        continue
+                    # Replace variable name when followed by . or = or whitespace/end or (
+                    # But not if it's part of a string literal
+                    protected_line = line
+                    # Replace variable name when followed by . or = or ( or whitespace/end
+                    pattern = rf'\b{re.escape(old_var)}\b(?=\s*[.=\(\)\[\],:]|\s*$)'
+                    protected_line = re.sub(pattern, new_var, protected_line)
+                    renamed_lines.append(protected_line)
+                code = '\n'.join(renamed_lines)
+        
+        # Replace client instantiation AFTER variable renaming
         code = re.sub(
             r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"].*?\)',
             r'gcs_client = storage.Client()  # Use a better name for the GCS client',
             code,
             flags=re.DOTALL
         )
-        
-        # Replace ALL references to the original client variable with gcs_client
-        # This handles cases like 'client', 's3', 's3_client', etc.
-        # But protect the comment text from replacement
-        if original_client_var:
-            # Replace the variable name everywhere it appears (as a word boundary)
-            # But NOT in comments - protect comment lines first by replacing them temporarily
-            lines = code.split('\n')
-            protected_lines = []
-            comment_map = {}
-            
-            for i, line in enumerate(lines):
-                if line.strip().startswith('#'):
-                    # This is a comment line - protect it
-                    placeholder = f'__COMMENT_LINE_{i}__'
-                    comment_map[placeholder] = line
-                    protected_lines.append(placeholder)
-                else:
-                    protected_lines.append(line)
-            
-            # Join and do replacement
-            protected_code = '\n'.join(protected_lines)
-            protected_code = re.sub(rf'\b{re.escape(original_client_var)}\b', 'gcs_client', protected_code)
-            
-            # Restore comments
-            code = protected_code
-            for placeholder, comment in comment_map.items():
-                code = code.replace(placeholder, comment)
         
         # Also replace common S3 variable names (do this after specific replacement)
         code = re.sub(r'\bs3_client\b', 'gcs_client', code)
@@ -523,10 +568,19 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             code
         )
         # Replace obj['Key'] with blob.name (obj variable becomes blob)
+        # Track this variable change
+        if re.search(r'\bobj\b', code) and 'obj' not in variable_mapping:
+            variable_mapping['obj'] = 'blob'
+        
         code = re.sub(r"obj\['Key'\]", r'blob.name', code)
         code = re.sub(r'obj\["Key"\]', r'blob.name', code)
         # Also handle any other obj references in the loop context
         code = re.sub(r'\bobj\b', 'blob', code)  # Replace obj with blob in loop context
+        
+        # Track response variable changes for list operations BEFORE transformation
+        # Find response variables from list_objects operations in ORIGINAL code
+        # We need to do this before the transformation changes the code structure
+        # So we'll track it earlier, but apply renaming after we've identified all variables
         
         # Remove ALL AWS/S3 references from comments and replace with GCP comments
         code = re.sub(r'#\s*AWS\s+S3\s+example', '# 🌟 GCP Cloud Storage Example', code, flags=re.IGNORECASE)
