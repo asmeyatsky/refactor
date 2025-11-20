@@ -671,7 +671,7 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             code
         )
         
-        return code
+        return code, variable_mapping
     
     def _add_exception_handling(self, code: str) -> str:
         """Add exception handling transformations for all AWS services"""
