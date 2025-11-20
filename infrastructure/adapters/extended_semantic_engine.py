@@ -368,10 +368,28 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Also handle any other obj references in the loop context
         code = re.sub(r'\bobj\b', 'blob', code)  # Replace obj with blob in loop context
         
+        # Remove AWS S3 comments and replace with GCP comments
+        code = re.sub(r'#\s*AWS\s+S3\s+example', '# 🌟 GCP Cloud Storage Example', code, flags=re.IGNORECASE)
+        code = re.sub(r'#\s*Upload\s+file\s+to\s+S3', '', code, flags=re.IGNORECASE)
+        code = re.sub(r'#\s*Download\s+file\s+from\s+S3', '', code, flags=re.IGNORECASE)
+        code = re.sub(r'#\s*List\s+objects\s+in\s+bucket', '', code, flags=re.IGNORECASE)
+        code = re.sub(r'#\s*AWS.*?S3.*?', '', code, flags=re.IGNORECASE)
+        
+        # Clean up multiple blank lines
+        code = re.sub(r'\n{3,}', '\n\n', code)
+        
         # Add header comment if not present
         if '# 🌟 GCP Cloud Storage Example' not in code:
-            code = code.replace('from google.cloud import storage',
-                              'from google.cloud import storage\n\n# 🌟 GCP Cloud Storage Example')
+            # Insert after import if it's the first line
+            if code.startswith('from google.cloud import storage'):
+                code = code.replace('from google.cloud import storage',
+                                  'from google.cloud import storage\n\n# 🌟 GCP Cloud Storage Example', 1)
+            else:
+                # Find import line and add after it
+                code = re.sub(r'(from google\.cloud import storage)',
+                            r'\1\n\n# 🌟 GCP Cloud Storage Example',
+                            code,
+                            count=1)
         
         # Replace S3 list_buckets -> GCS list_buckets
         # Handle assignment pattern: buckets = s3.list_buckets()
