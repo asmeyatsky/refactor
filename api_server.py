@@ -157,7 +157,14 @@ def get_migration_status(migration_id: str):
                         code_file = codebase_path / f"code.{file_ext}"
                         if code_file.exists():
                             with open(code_file, 'r', encoding='utf-8') as f:
-                                response["refactored_code"] = f.read()
+                                content = f.read()
+                                # CRITICAL: Final AWS cleanup pass before returning
+                                if job['request'].language == 'python':
+                                    from infrastructure.adapters.extended_semantic_engine import ExtendedASTTransformationEngine
+                                    ast_engine = ExtendedASTTransformationEngine()
+                                    if hasattr(ast_engine, '_aggressive_aws_cleanup'):
+                                        content = ast_engine._aggressive_aws_cleanup(content)
+                                response["refactored_code"] = content
                 except Exception as e:
                     print(f"Warning: Could not read refactored code from file: {e}")
             
@@ -225,6 +232,13 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
             if code_file.exists():
                 with open(code_file, 'r', encoding='utf-8') as f:
                     refactored_code = f.read()
+                    
+                    # CRITICAL: Final AWS cleanup pass before returning
+                    if request.language == 'python':
+                        from infrastructure.adapters.extended_semantic_engine import ExtendedASTTransformationEngine
+                        ast_engine = ExtendedASTTransformationEngine()
+                        if hasattr(ast_engine, '_aggressive_aws_cleanup'):
+                            refactored_code = ast_engine._aggressive_aws_cleanup(refactored_code)
         except Exception as e:
             print(f"Warning: Could not read refactored code: {e}")
         
