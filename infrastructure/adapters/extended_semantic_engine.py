@@ -2394,10 +2394,16 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Add exception handling
         code = self._add_exception_handling(code)
         
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
+        
         return code, variable_mapping
     
     def _migrate_dynamodb_to_firestore(self, code: str) -> str:
         """Migrate AWS DynamoDB to Google Cloud Firestore"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace DynamoDB imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import firestore', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import firestore', code, flags=re.MULTILINE)
@@ -2552,10 +2558,16 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Add exception handling
         code = self._add_exception_handling(code)
         
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
+        
         return code
     
     def _migrate_sqs_to_pubsub(self, code: str) -> str:
         """Migrate AWS SQS to Google Cloud Pub/Sub"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace SQS imports FIRST
         code = re.sub(r'^import boto3\s*$', 'import os\nfrom google.cloud import pubsub_v1', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'import os\nfrom google.cloud import pubsub_v1', code, flags=re.MULTILINE)
@@ -2721,10 +2733,16 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Add exception handling
         code = self._add_exception_handling(code)
         
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
+        
         return code
     
     def _migrate_sns_to_pubsub(self, code: str) -> str:
         """Migrate AWS SNS to Google Cloud Pub/Sub"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace SNS imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import pubsub_v1', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import pubsub_v1', code, flags=re.MULTILINE)
@@ -2754,10 +2772,16 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Add exception handling
         code = self._add_exception_handling(code)
         
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
+        
         return code
     
     def _migrate_rds_to_cloud_sql(self, code: str) -> str:
         """Migrate AWS RDS to Google Cloud SQL"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace boto3 RDS client imports
         code = re.sub(r'^import boto3\s*$', '', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', '', code, flags=re.MULTILINE)
@@ -2797,10 +2821,16 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Add exception handling
         code = self._add_exception_handling(code)
         
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
+        
         return code
 
     def _migrate_cloudwatch_to_monitoring(self, code: str) -> str:
         """Migrate AWS CloudWatch to Google Cloud Monitoring"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace CloudWatch imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import monitoring_v3', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import monitoring_v3', code, flags=re.MULTILINE)
@@ -2829,11 +2859,17 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
 
         # Add exception handling
         code = self._add_exception_handling(code)
+        
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
 
         return code
 
     def _migrate_apigateway_to_apigee(self, code: str) -> str:
         """Migrate AWS API Gateway to Apigee X"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace API Gateway imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import apigee_registry_v1', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import apigee_registry_v1', code, flags=re.MULTILINE)
@@ -2869,11 +2905,17 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
 
         # Add exception handling
         code = self._add_exception_handling(code)
+        
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
 
         return code
 
     def _migrate_eks_to_gke(self, code: str) -> str:
         """Migrate AWS EKS to Google Kubernetes Engine"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace EKS imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import container_v1', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import container_v1', code, flags=re.MULTILINE)
@@ -2915,12 +2957,18 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         )
 
         # Add exception handling
-        self._add_exception_handling(code)
+        code = self._add_exception_handling(code)
+        
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
 
         return code
 
     def _migrate_fargate_to_cloudrun(self, code: str) -> str:
         """Migrate AWS Fargate (ECS) to Google Cloud Run"""
+        # Store original code for Gemini validation
+        original_code = code
+        
         # Replace ECS/Fargate imports (ECS manages Fargate tasks)
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import run_v2\nfrom google.cloud.run_v2.types import Service', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import run_v2\nfrom google.cloud.run_v2.types import Service', code, flags=re.MULTILINE)
@@ -2963,6 +3011,9 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
 
         # Add exception handling
         code = self._add_exception_handling(code)
+        
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
 
         return code
 
