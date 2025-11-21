@@ -21,7 +21,10 @@ from application.use_cases import (
     CreateMultiServiceRefactoringPlanUseCase,
     ExecuteMultiServiceRefactoringPlanUseCase
 )
+from application.use_cases.analyze_repository_use_case import AnalyzeRepositoryUseCase
+from application.use_cases.execute_repository_migration_use_case import ExecuteRepositoryMigrationUseCase
 from infrastructure.adapters.s3_gcs_migration import create_multi_service_migration_system
+from infrastructure.adapters.git_adapter import GitCredentials, GitProvider
 from domain.value_objects import AWSService, AzureService, GCPService
 
 app = FastAPI(
@@ -51,6 +54,7 @@ class MigrateRequest(BaseModel):
     code: str
     language: str
     services: List[str]
+    cloud_provider: Optional[str] = None  # 'aws' or 'azure'
 
 
 class MigrateResponse(BaseModel):
@@ -251,6 +255,170 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
             # Note: We keep the codebase directory until after the result is read by the API endpoint
         except:
             pass  # Best effort cleanup
+
+
+class AnalyzeRepositoryRequest(BaseModel):
+    repository_url: str
+    branch: str = "main"
+    token: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+
+class MigrateRepositoryRequest(BaseModel):
+    services: Optional[List[str]] = None
+    create_pr: bool = False
+    branch_name: Optional[str] = None
+    run_tests: bool = False
+
+
+@app.post("/api/repository/analyze")
+async def analyze_repository_endpoint(request: AnalyzeRepositoryRequest):
+    """Analyze a Git repository and generate MAR"""
+    try:
+        credentials = None
+        if request.token:
+            # Detect provider from URL
+            from infrastructure.adapters.git_adapter import GitAdapter
+            adapter = GitAdapter()
+            provider = adapter.detect_provider(request.repository_url)
+            
+            credentials = GitCredentials(
+                provider=provider,
+                token=request.token,
+                username=request.username,
+                password=request.password
+            )
+        
+        use_case = AnalyzeRepositoryUseCase()
+        result = use_case.execute(
+            repository_url=request.repository_url,
+            branch=request.branch,
+            credentials=credentials
+        )
+        
+        if result['success']:
+            return {
+                "success": True,
+                "repository_id": result['repository_id'],
+                "mar": result['mar'].to_dict() if result['mar'] else None,
+                "repository": {
+                    "id": result['repository'].id,
+                    "url": result['repository'].url,
+                    "branch": result['repository'].branch,
+                    "status": result['repository'].status.value,
+                    "total_files": result['repository'].total_files,
+                    "total_lines": result['repository'].total_lines,
+                }
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result.get('error', 'Analysis failed'))
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/repository/{repository_id}/migrate")
+async def migrate_repository_endpoint(repository_id: str, request: MigrateRepositoryRequest):
+    """Execute repository migration"""
+    try:
+        from infrastructure.repositories.repository_repository import RepositoryRepositoryAdapter
+        from infrastructure.adapters.mar_generator import MARGenerator
+        
+        repo_repo = RepositoryRepositoryAdapter()
+        repository = repo_repo.load(repository_id)
+        
+        if not repository:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        if not repository.local_path:
+            raise HTTPException(status_code=400, detail="Repository not cloned. Please analyze first.")
+        
+        # Regenerate MAR
+        mar_generator = MARGenerator()
+        mar = mar_generator.generate_mar(
+            repository_path=repository.local_path,
+            repository_id=repository.id,
+            repository_url=repository.url,
+            branch=repository.branch
+        )
+        
+        # Execute migration
+        use_case = ExecuteRepositoryMigrationUseCase()
+        result = use_case.execute(
+            repository_id=repository_id,
+            mar=mar,
+            services_to_migrate=request.services,
+            run_tests=request.run_tests
+        )
+        
+        # Create PR if requested
+        pr_url = None
+        if request.create_pr and result['success']:
+            try:
+                from infrastructure.adapters.pr_manager import PRManager
+                pr_manager = PRManager()
+                pr_result = pr_manager.create_migration_pr(
+                    repository=repository,
+                    mar=mar,
+                    branch_name=request.branch_name
+                )
+                if pr_result['success']:
+                    pr_url = pr_result.get('pr_url')
+            except Exception as e:
+                print(f"PR creation failed: {e}")
+        
+        return {
+            "success": result['success'],
+            "repository_id": repository_id,
+            "files_changed": result.get('files_changed', []),
+            "files_failed": result.get('files_failed', []),
+            "total_files_changed": result.get('total_files_changed', 0),
+            "total_files_failed": result.get('total_files_failed', 0),
+            "test_results": result.get('test_results'),
+            "pr_url": pr_url,
+            "error": result.get('error')
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/repository/list")
+async def list_repositories():
+    """List all analyzed repositories"""
+    try:
+        from infrastructure.repositories.repository_repository import RepositoryRepositoryAdapter
+        import os
+        
+        repo_repo = RepositoryRepositoryAdapter()
+        storage_path = repo_repo.storage_path
+        
+        if not os.path.exists(storage_path):
+            return {"repositories": []}
+        
+        repositories = []
+        for filename in os.listdir(storage_path):
+            if filename.endswith('.json'):
+                repo_id = filename[:-5]
+                repo = repo_repo.load(repo_id)
+                if repo:
+                    repositories.append({
+                        "id": repo.id,
+                        "url": repo.url,
+                        "branch": repo.branch,
+                        "status": repo.status.value,
+                        "total_files": repo.total_files,
+                        "total_lines": repo.total_lines,
+                        "created_at": repo.created_at.isoformat(),
+                    })
+        
+        return {"repositories": repositories}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/health")

@@ -43,3 +43,6 @@ mypy>=1.7.0
 
 # PDF reading (for documentation)
 PyPDF2>=3.0.1
+
+# YAML parsing (for IaC files)
+PyYAML>=6.0.1

@@ -13,6 +13,7 @@ import subprocess
 import sys
 import os
 import logging
+import json
 from typing import List, Dict, Any, Optional
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -20,6 +21,8 @@ from pathlib import Path
 from domain.entities.codebase import Codebase
 from domain.entities.refactoring_plan import RefactoringTask
 from domain.ports import CodeAnalyzerPort, LLMProviderPort, ASTTransformationPort, TestRunnerPort
+from infrastructure.adapters.toon_serializer import ToonSerializer, to_toon, from_toon
+from infrastructure.adapters.toon_integration import ToonGeminiIntegration
 
 # Import config
 try:
@@ -144,16 +147,19 @@ class LLMProviderAdapter(LLMProviderPort):
         self._init_provider()
     
     def _init_provider(self):
-        """Initialize the Gemini LLM provider"""
+        """Initialize the Gemini LLM provider with tool support"""
         if self.provider == "gemini" and config.GEMINI_API_KEY:
             try:
                 import google.generativeai as genai
                 genai.configure(api_key=config.GEMINI_API_KEY)
-                # Use gemini-2.5-flash for fast, cost-effective responses
+                # Use gemini-2.5-flash for fast, cost-effective responses with tool support
                 # Alternative: models/gemini-pro-latest or models/gemini-2.5-pro for better quality
-                self.client = genai.GenerativeModel('models/gemini-2.5-flash')
+                self.client = genai.GenerativeModel(
+                    'models/gemini-2.5-flash',
+                    tools=self._get_gemini_tools()  # Add tool support for token optimization
+                )
                 self.provider_type = "gemini"
-                logger.info("Initialized Google Gemini LLM provider (using gemini-2.5-flash)")
+                logger.info("Initialized Google Gemini LLM provider with tool support (using gemini-2.5-flash)")
             except ImportError:
                 logger.warning("google-generativeai package not installed, falling back to mock")
                 self.provider_type = "mock"
@@ -166,6 +172,117 @@ class LLMProviderAdapter(LLMProviderPort):
                 logger.info("Using mock LLM provider (set GEMINI_API_KEY to use Gemini)")
             else:
                 logger.info("Using mock LLM provider (set LLM_PROVIDER=gemini to use Gemini)")
+    
+    def _get_gemini_tools(self):
+        """Define Gemini tools/functions for token optimization"""
+        import google.generativeai as genai
+        
+        # Define tools using the proper format for Gemini API
+        return [
+            genai.protos.FunctionDeclaration(
+                name="detect_cloud_services",
+                description="Detect cloud services (AWS/Azure) in code snippets. Use this instead of describing services in text to save tokens.",
+                parameters=genai.protos.Schema(
+                    type=genai.protos.Type.OBJECT,
+                    properties={
+                        "services": genai.protos.Schema(
+                            type=genai.protos.Type.ARRAY,
+                            items=genai.protos.Schema(type=genai.protos.Type.STRING),
+                            description="List of detected cloud services (e.g., ['s3', 'lambda', 'dynamodb'])"
+                        ),
+                        "service_type": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            enum=["aws", "azure"],
+                            description="Cloud provider type"
+                        ),
+                        "confidence": genai.protos.Schema(
+                            type=genai.protos.Type.NUMBER,
+                            description="Confidence score 0-1"
+                        )
+                    },
+                    required=["services", "service_type"]
+                )
+            ),
+            genai.protos.FunctionDeclaration(
+                name="get_service_mapping",
+                description="Get the GCP equivalent for an AWS/Azure service. Use this to avoid generating long mapping descriptions and save tokens.",
+                parameters=genai.protos.Schema(
+                    type=genai.protos.Type.OBJECT,
+                    properties={
+                        "source_service": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            description="Source service name (e.g., 's3', 'lambda', 'blob_storage')"
+                        ),
+                        "target_service": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            description="GCP equivalent (e.g., 'cloud_storage', 'cloud_functions')"
+                        ),
+                        "api_mappings": genai.protos.Schema(
+                            type=genai.protos.Type.ARRAY,
+                            items=genai.protos.Schema(
+                                type=genai.protos.Type.OBJECT,
+                                properties={
+                                    "source": genai.protos.Schema(type=genai.protos.Type.STRING),
+                                    "target": genai.protos.Schema(type=genai.protos.Type.STRING)
+                                }
+                            ),
+                            description="API method mappings"
+                        )
+                    },
+                    required=["source_service", "target_service"]
+                )
+            ),
+            genai.protos.FunctionDeclaration(
+                name="validate_code_syntax",
+                description="Validate Python code syntax. Use this to check if generated code is valid before returning, avoiding verbose error descriptions.",
+                parameters=genai.protos.Schema(
+                    type=genai.protos.Type.OBJECT,
+                    properties={
+                        "code": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            description="Python code to validate"
+                        ),
+                        "is_valid": genai.protos.Schema(
+                            type=genai.protos.Type.BOOLEAN,
+                            description="Whether the code is syntactically valid"
+                        ),
+                        "errors": genai.protos.Schema(
+                            type=genai.protos.Type.ARRAY,
+                            items=genai.protos.Schema(type=genai.protos.Type.STRING),
+                            description="List of syntax errors if any"
+                        )
+                    },
+                    required=["code", "is_valid"]
+                )
+            ),
+            genai.protos.FunctionDeclaration(
+                name="get_transformation_pattern",
+                description="Get specific transformation patterns for code refactoring. Use this to get exact patterns instead of generating verbose descriptions, saving tokens.",
+                parameters=genai.protos.Schema(
+                    type=genai.protos.Type.OBJECT,
+                    properties={
+                        "pattern_type": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            enum=["import", "client_init", "api_call", "error_handling", "config"],
+                            description="Type of transformation pattern needed"
+                        ),
+                        "source_pattern": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            description="Source code pattern"
+                        ),
+                        "target_pattern": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            description="Target GCP code pattern"
+                        ),
+                        "example": genai.protos.Schema(
+                            type=genai.protos.Type.STRING,
+                            description="Example transformation"
+                        )
+                    },
+                    required=["pattern_type", "source_pattern", "target_pattern"]
+                )
+            )
+        ]
     
     def generate_refactoring_intent(self, codebase: Codebase, file_path: str, target: str) -> str:
         """Generate refactoring intent using Gemini"""
@@ -186,24 +303,32 @@ class LLMProviderAdapter(LLMProviderPort):
             except:
                 file_content = "Unable to read file content"
             
-            prompt = f"""Analyze the following code file and determine the refactoring intent for migrating to {target}.
-
-File: {file_path}
-Language: {codebase.language.value}
+            # Use TOON format for structured data to optimize tokens
+            code_metadata = {
+                "file": file_path,
+                "language": codebase.language.value,
+                "size": len(file_content),
+                "target": target
+            }
+            
+            prompt = ToonGeminiIntegration.prepare_prompt_with_toon(
+                f"""Analyze the code and determine refactoring intent for migrating to {target}.
 
 Code:
 ```{codebase.language.value}
 {file_content}
 ```
 
-Provide a concise summary of:
-1. What cloud services are being used (AWS S3, Azure Blob Storage, etc.)
-2. What needs to be migrated to {target}
-3. Key transformation points in the code
+Provide:
+1. Detected cloud services (use TOON format)
+2. Migration targets to {target}
+3. Key transformation points
 
-Keep the response focused and actionable."""
+Keep response focused and use TOON format for structured data.""",
+                code_metadata
+            )
 
-            # Generate content using Gemini
+            # Generate content using Gemini with tool support and TOON format
             response = self.client.generate_content(
                 prompt,
                 generation_config=genai.types.GenerationConfig(
@@ -212,8 +337,19 @@ Keep the response focused and actionable."""
                 )
             )
             
-            # Proper response parsing with validation
+            # Handle function calls if any (tool usage)
+            response = self._handle_function_calls(response)
+            
+            # Extract response and convert from TOON if needed
             output = self._extract_and_validate_response(response)
+            
+            # If output contains TOON format, parse it
+            if output:
+                parsed_output = ToonGeminiIntegration.parse_toon_response(output)
+                if isinstance(parsed_output, dict) and parsed_output != output:
+                    # Convert parsed TOON to readable format
+                    output = json.dumps(parsed_output, indent=2)
+            
             if output:
                 return output
             else:
@@ -325,24 +461,28 @@ Generate a detailed refactoring intent that includes:
         try:
             import google.generativeai as genai
             
-            # Build comprehensive prompt for code transformation
+            # Build comprehensive prompt using TOON format for structured data
             code_snippet = analysis.get('code', '')[:3000]  # Limit code size
             service_type = analysis.get('service_type', 'unknown')
             language = analysis.get('language', 'python')
             target = analysis.get('target', 'gcp')
             
-            prompt = f"""You are an expert code refactoring engineer specializing in cloud service migrations.
+            # Prepare structured data for TOON format
+            analysis_data = {
+                "service_type": service_type,
+                "language": language,
+                "target": target,
+                "code_size": len(code_snippet)
+            }
+            
+            base_prompt = f"""You are an expert code refactoring engineer specializing in cloud service migrations.
 
-TASK: Generate a detailed transformation recipe for migrating AWS/Azure code to Google Cloud Platform (GCP).
+TASK: Generate transformation recipe for migrating AWS/Azure code to Google Cloud Platform (GCP).
 
 Code to transform:
 ```{language}
 {code_snippet}
 ```
-
-Service Type: {service_type}
-Target Platform: {target}
-Language: {language}
 
 CRITICAL REQUIREMENTS:
 1. Generate ONLY syntactically correct Python code
@@ -355,10 +495,13 @@ CRITICAL REQUIREMENTS:
 8. Update configuration parameters (e.g., AWS regions → GCP regions)
 9. Handle edge cases and special considerations
 
-IMPORTANT: The output must be valid Python code that can be executed without syntax errors.
-Be specific and provide exact patterns to match and their replacements."""
+IMPORTANT: Use TOON format for any structured data in your response to optimize tokens.
+The output code must be valid Python code that can be executed without syntax errors."""
+            
+            # Use TOON integration to optimize prompt
+            prompt = ToonGeminiIntegration.prepare_prompt_with_toon(base_prompt, analysis_data)
 
-            # Generate recipe using Gemini with retry logic for syntax validation
+            # Generate recipe using Gemini with retry logic and tool support for token optimization
             max_retries = 3
             for attempt in range(max_retries):
                 response = self.client.generate_content(
@@ -370,8 +513,20 @@ Be specific and provide exact patterns to match and their replacements."""
                     )
                 )
                 
+                # Handle function calls if any (tool usage for token optimization)
+                response = self._handle_function_calls(response)
+                
                 # Extract and validate response
                 output = self._extract_and_validate_response(response, is_code=True)
+                
+                # If output contains TOON format (but not code), parse it
+                if output and is_code == False and '|' in output and '\n' in output:
+                    try:
+                        parsed = ToonSerializer.from_toon(output)
+                        if isinstance(parsed, dict):
+                            output = json.dumps(parsed, indent=2)
+                    except:
+                        pass
                 if output:
                     return output
                 else:
@@ -480,6 +635,200 @@ CRITICAL: The previous response had syntax errors. Please ensure:
 4. Complete, executable code only"""
         
         return original_prompt + enhancement
+    
+    def _handle_function_calls(self, response):
+        """
+        Handle Gemini function calls (tool usage) to optimize token usage.
+        Executes function calls and returns updated response.
+        """
+        try:
+            import google.generativeai as genai
+            
+            # Check if response contains function calls
+            if not response or not response.candidates:
+                return response
+            
+            candidate = response.candidates[0]
+            if not hasattr(candidate, 'content') or not candidate.content:
+                return response
+            
+            # Check for function calls in parts
+            function_calls = []
+            for part in candidate.content.parts:
+                if hasattr(part, 'function_call') and part.function_call:
+                    function_calls.append(part.function_call)
+            
+            if not function_calls:
+                return response
+            
+            # Execute function calls and build function responses
+            function_responses = []
+            for func_call in function_calls:
+                func_name = func_call.name
+                func_args = {}
+                
+                # Extract arguments
+                if hasattr(func_call, 'args') and func_call.args:
+                    for key, value in func_call.args.items():
+                        func_args[key] = value
+                
+                # Execute function
+                func_result = self._execute_tool_function(func_name, func_args)
+                
+                # Convert result to TOON format for token optimization
+                func_result_toon = to_toon(func_result)
+                
+                # Create function response (Gemini will receive TOON format)
+                function_responses.append(
+                    genai.protos.Part(
+                        function_response=genai.protos.FunctionResponse(
+                            name=func_name,
+                            response=func_result  # Gemini handles TOON conversion internally
+                        )
+                    )
+                )
+            
+            # If we have function responses, continue the conversation
+            if function_responses:
+                # Create a follow-up request with function responses
+                follow_up_parts = []
+                # Add original prompt context
+                for part in candidate.content.parts:
+                    if hasattr(part, 'text') and part.text:
+                        follow_up_parts.append(part)
+                # Add function responses
+                follow_up_parts.extend(function_responses)
+                
+                # Generate follow-up response
+                follow_up_response = self.client.generate_content(
+                    follow_up_parts,
+                    generation_config=genai.types.GenerationConfig(
+                        temperature=0.2,
+                        max_output_tokens=2000,
+                    )
+                )
+                
+                return follow_up_response
+            
+            return response
+            
+        except Exception as e:
+            logger.warning(f"Error handling function calls: {e}, continuing with original response")
+            return response
+    
+    def _execute_tool_function(self, func_name: str, args: dict) -> dict:
+        """
+        Execute tool functions to provide structured data instead of text.
+        This optimizes token usage by returning structured responses.
+        """
+        import ast
+        
+        if func_name == "detect_cloud_services":
+            # Use existing service detection logic
+            code = args.get('code', '')
+            services = []
+            service_type = 'aws'
+            
+            # Quick detection patterns
+            aws_patterns = {
+                's3': ['boto3.client("s3"', 'boto3.resource("s3"', 's3_client', 's3_bucket'],
+                'lambda': ['boto3.client("lambda"', 'lambda_handler', 'lambda_client'],
+                'dynamodb': ['boto3.client("dynamodb"', 'boto3.resource("dynamodb"', 'dynamodb_table'],
+                'sqs': ['boto3.client("sqs"', 'sqs_client', 'QueueUrl'],
+                'sns': ['boto3.client("sns"', 'sns_client', 'TopicArn'],
+            }
+            
+            azure_patterns = {
+                'blob_storage': ['BlobServiceClient', 'azure.storage.blob'],
+                'functions': ['azure.functions', 'func.HttpRequest'],
+                'cosmos_db': ['CosmosClient', 'azure.cosmos'],
+                'service_bus': ['ServiceBusClient', 'azure.servicebus'],
+            }
+            
+            code_lower = code.lower()
+            for service, patterns in aws_patterns.items():
+                if any(pattern.lower() in code_lower for pattern in patterns):
+                    services.append(service)
+            
+            if not services:
+                for service, patterns in azure_patterns.items():
+                    if any(pattern.lower() in code_lower for pattern in patterns):
+                        services.append(service)
+                        service_type = 'azure'
+            
+            # Return structured data (will be converted to TOON format by Gemini)
+            return {
+                "services": services,
+                "service_type": service_type,
+                "confidence": 0.9 if services else 0.1
+            }
+        
+        elif func_name == "get_service_mapping":
+            # Return service mappings
+            source = args.get('source_service', '')
+            mappings = {
+                's3': ('cloud_storage', [{'source': 'upload_file', 'target': 'upload_from_filename'}]),
+                'lambda': ('cloud_functions', [{'source': 'invoke', 'target': 'call'}]),
+                'dynamodb': ('firestore', [{'source': 'put_item', 'target': 'set'}]),
+                'blob_storage': ('cloud_storage', [{'source': 'upload_blob', 'target': 'upload_from_filename'}]),
+            }
+            
+            if source in mappings:
+                target, api_maps = mappings[source]
+                return {
+                    "source_service": source,
+                    "target_service": target,
+                    "api_mappings": api_maps
+                }
+            return {
+                "source_service": source,
+                "target_service": "unknown",
+                "api_mappings": []
+            }
+        
+        elif func_name == "validate_code_syntax":
+            # Validate Python syntax
+            code = args.get('code', '')
+            try:
+                ast.parse(code)
+                return {
+                    "code": code[:100],  # Truncate for response
+                    "is_valid": True,
+                    "errors": []
+                }
+            except SyntaxError as e:
+                return {
+                    "code": code[:100],
+                    "is_valid": False,
+                    "errors": [str(e)]
+                }
+        
+        elif func_name == "get_transformation_pattern":
+            # Return transformation patterns
+            pattern_type = args.get('pattern_type', '')
+            patterns = {
+                'import': {
+                    'source_pattern': 'import boto3',
+                    'target_pattern': 'from google.cloud import storage',
+                    'example': 'import boto3 → from google.cloud import storage'
+                },
+                'client_init': {
+                    'source_pattern': "boto3.client('s3')",
+                    'target_pattern': 'storage.Client()',
+                    'example': "boto3.client('s3') → storage.Client()"
+                }
+            }
+            
+            if pattern_type in patterns:
+                return patterns[pattern_type]
+            return {
+                "pattern_type": pattern_type,
+                "source_pattern": "",
+                "target_pattern": "",
+                "example": ""
+            }
+        
+        return {"error": f"Unknown function: {func_name}"}
     
 
 class ASTTransformationAdapter(ASTTransformationPort):

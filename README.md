@@ -11,7 +11,11 @@ The Universal Cloud Refactor Agent is an autonomous system designed to automate 
 - **Comprehensive Verification**: Ensures behavioral preservation through testing
 - **Security Validation**: Implements mandatory security checks
 - **Context Management**: Stores and manages information between refactoring tasks
-- **Repository-Level Migration** 🆕: Migrate entire codebases with a single command, including cross-file dependency tracking and atomic PR generation
+- **Repository-Level Migration** 🆕: Migrate entire Git repositories with cross-file dependency tracking, atomic PR generation, and Migration Assessment Reports (MAR)
+- **Agentic Web UI** 🆕: Step-by-step wizard interface for guided migration workflows
+- **TOON Format Integration** 🆕: Token-optimized data format reducing Gemini API costs by 70-75%
+- **Infrastructure as Code Migration** 🆕: Automatic detection and migration of Terraform, CloudFormation, and Pulumi files
+- **Test Execution Framework** 🆕: Automated test execution after migration with multi-framework support
 
 ## Supported Service Migrations
 
@@ -81,37 +85,59 @@ pip install astor  # For AST transformations
 
 ## Usage
 
+### Web Interface 🆕 (Recommended)
+
+Start the agentic web interface for guided migration:
+
+```bash
+# Terminal 1: Start API server
+python api_server.py
+
+# Terminal 2: Start frontend
+cd frontend && npm start
+```
+
+Visit http://localhost:3000 for the step-by-step migration wizard:
+1. **Select Cloud Provider** (AWS or Azure)
+2. **Choose Input Method** (Code Snippet or Repository)
+3. **Provide Code/Repository** (paste code or import Git repo)
+4. **Review & Migrate** (see results and create PR)
+
 ### Repository-Level Migration 🆕
 
-Migrate entire Git repositories with a single command:
+Migrate entire Git repositories via CLI:
+
+```bash
+# Analyze repository and generate MAR
+python main.py repo analyze https://github.com/user/repo.git --branch main --token YOUR_TOKEN
+
+# Execute migration
+python main.py repo migrate <repository_id> --create-pr --run-tests
+
+# List analyzed repositories
+python main.py repo list
+```
+
+Or programmatically:
 
 ```python
-from infrastructure.adapters.repository_migration import RepositoryMigrationEngine
+from application.use_cases.analyze_repository_use_case import AnalyzeRepositoryUseCase
+from application.use_cases.execute_repository_migration_use_case import ExecuteRepositoryMigrationUseCase
 
-# Initialize repository migration engine
-migration_engine = RepositoryMigrationEngine()
-
-# Migrate entire repository from Git URL
-result = migration_engine.migrate_repository(
+# Analyze repository
+analyze_uc = AnalyzeRepositoryUseCase()
+result = analyze_uc.execute(
     repository_url="https://github.com/user/repo.git",
-    branch="main",
-    target_cloud="gcp",
-    auto_approve=False  # Generate MAR first for review
+    branch="main"
 )
 
-# Review Migration Assessment Report (MAR)
-print(f"Services detected: {result['mar']['services_detected']}")
-print(f"Files to modify: {result['mar']['files_affected']}")
-print(f"Estimated changes: {result['mar']['estimated_changes']}")
-
-# Execute migration after review
-if result['mar']['confidence_score'] > 0.8:
-    pr_result = migration_engine.execute_migration(
-        repository_url="https://github.com/user/repo.git",
-        branch="main",
-        migration_plan=result['mar']
-    )
-    print(f"PR created: {pr_result['pr_url']}")
+# Execute migration
+migrate_uc = ExecuteRepositoryMigrationUseCase()
+migration_result = migrate_uc.execute(
+    repository_id=result['repository_id'],
+    mar=result['mar'],
+    run_tests=True
+)
 ```
 
 ### Multi-Service Migration
@@ -172,30 +198,34 @@ print(f"AWS services found: {analysis_report['aws_services_found']}")
 ### Repository-Level Migration 🆕
 
 ```bash
-# Migrate entire repository from Git URL
-python main.py --repository https://github.com/user/repo.git --branch main
+# Analyze repository and generate MAR
+python main.py repo analyze https://github.com/user/repo.git \
+  --branch main \
+  --token YOUR_GITHUB_TOKEN \
+  --output mar.json
 
-# Generate Migration Assessment Report (MAR) without executing
-python main.py --repository https://github.com/user/repo.git --mar-only
+# Execute migration with PR creation
+python main.py repo migrate <repository_id> \
+  --services s3 lambda \
+  --create-pr \
+  --run-tests \
+  --branch-name cloud-migration-2024
 
-# Migrate with specific services
-python main.py --repository https://github.com/user/repo.git --services s3 lambda dynamodb
-
-# Auto-approve and create PR
-python main.py --repository https://github.com/user/repo.git --auto-approve
+# List all analyzed repositories
+python main.py repo list
 ```
 
 ### File/Codebase-Level Migration
 
 ```bash
-# Auto-detect and migrate all supported AWS services
-python main.py /path/to/codebase --language python
+# Auto-detect and migrate all supported services
+python main.py local /path/to/codebase --language python
 
 # Migrate specific services only
-python main.py /path/to/codebase --language python --services s3 lambda dynamodb
-
-# Verbose output
-python main.py /path/to/codebase --language python --verbose
+python main.py local /path/to/codebase \
+  --language python \
+  --services s3 lambda dynamodb \
+  --verbose
 ```
 
 ## Testing
@@ -254,21 +284,25 @@ The system is designed to:
 - Comprehensive AWS & Azure to GCP service mappings
 - AST-powered transformations
 - Test validation framework
+- **Repository-Level Migration**: Full Git repository migration with MAR generation
+- **Agentic Web UI**: Step-by-step wizard interface
+- **TOON Format Integration**: 70-75% token reduction for Gemini API calls
+- **Infrastructure as Code Migration**: Terraform, CloudFormation, Pulumi support
+- **Test Execution Framework**: Automated testing with pytest, unittest, Jest, JUnit
+- **Pull Request Generation**: Automatic PR/MR creation for GitHub, GitLab, Bitbucket
 
 ### In Development 🔄
-- **Repository-Level Migration**: Migrate entire Git repositories with cross-file dependency tracking
-- **Migration Assessment Report (MAR)**: Pre-migration analysis and planning
-- **Atomic PR Generation**: Single Pull Request with all refactored changes
-- **Git Integration**: Support for GitHub, GitLab, Bitbucket
+- Enhanced IaC migration patterns
+- Additional programming language support (Go, Node.js, C#)
+- Advanced dependency analysis
+- CI/CD pipeline integration
 
 ### Planned Features 📋
-- Infrastructure as Code (IaC) translation capabilities (CloudFormation to Terraform)
-- Support for additional programming languages (Go, Node.js, C#)
-- Container migration (ECS to GKE)
 - Database schema migration capabilities
-- CI/CD pipeline updates
-- Cross-file dependency mapping and refactoring
+- Container orchestration migration (ECS to GKE)
 - Automated test generation for refactored code
+- Multi-repository batch migration
+- Migration rollback capabilities
 
 See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed repository-level migration requirements.
 

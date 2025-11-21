@@ -45,23 +45,47 @@ cd ..
 
 ## Running the Application
 
-### Option 1: Repository-Level Migration 🆕
+### Option 1: Agentic Web Interface 🆕 (Recommended)
 
+The new step-by-step wizard guides you through migration:
+
+**Terminal 1 - Start API Server:**
 ```bash
-# Migrate entire repository from Git URL
-python main.py --repository https://github.com/user/repo.git --branch main
-
-# Generate Migration Assessment Report (MAR) without executing
-python main.py --repository https://github.com/user/repo.git --mar-only
-
-# Migrate with specific services
-python main.py --repository https://github.com/user/repo.git --services s3 lambda dynamodb
-
-# Auto-approve and create PR
-python main.py --repository https://github.com/user/repo.git --auto-approve
+python api_server.py
 ```
 
-### Option 2: Command Line Interface (File/Codebase-Level)
+**Terminal 2 - Start Frontend:**
+```bash
+cd frontend
+npm start
+```
+
+Visit http://localhost:3000 and follow the wizard:
+1. Select your cloud provider (AWS or Azure)
+2. Choose input method (Code Snippet or Repository)
+3. Provide your code or repository URL
+4. Review results and create Pull Request
+
+### Option 2: Repository-Level Migration via CLI 🆕
+
+```bash
+# Analyze repository and generate MAR
+python main.py repo analyze https://github.com/user/repo.git \
+  --branch main \
+  --token YOUR_TOKEN \
+  --output mar.json
+
+# Execute migration with PR creation
+python main.py repo migrate <repository_id> \
+  --create-pr \
+  --run-tests \
+  --branch-name cloud-migration
+
+# List analyzed repositories
+python main.py repo list
+```
+
+### Option 3: Command Line Interface (File/Codebase-Level)
 
 ```bash
 # Migrate a codebase (auto-detect services)
@@ -74,7 +98,7 @@ python main.py /path/to/your/codebase --language python --services s3 lambda dyn
 python main.py /path/to/your/codebase --language python --verbose
 ```
 
-### Option 3: API Server
+### Option 4: API Server
 
 ```bash
 # Start the API server
@@ -84,7 +108,7 @@ python api_server.py
 # API docs available at http://localhost:8000/docs
 ```
 
-### Option 4: Full Stack (API + Frontend)
+### Option 5: Full Stack (API + Frontend)
 
 **Terminal 1 - API Server:**
 ```bash
@@ -99,7 +123,7 @@ npm start
 
 Visit http://localhost:3000 to use the web interface.
 
-### Option 5: Docker
+### Option 6: Docker
 
 ```bash
 # Build and run with Docker Compose
@@ -142,30 +166,37 @@ python main.py test_codebase --language python --services s3
 ### Repository-Level Migration Example 🆕
 
 ```python
-from infrastructure.adapters.repository_migration import RepositoryMigrationEngine
+from application.use_cases.analyze_repository_use_case import AnalyzeRepositoryUseCase
+from application.use_cases.execute_repository_migration_use_case import ExecuteRepositoryMigrationUseCase
+from infrastructure.adapters.git_adapter import GitCredentials, GitProvider
 
-# Initialize repository migration engine
-migration_engine = RepositoryMigrationEngine()
-
-# Step 1: Generate Migration Assessment Report (MAR)
-mar_result = migration_engine.analyze_repository(
+# Step 1: Analyze repository
+analyze_uc = AnalyzeRepositoryUseCase()
+result = analyze_uc.execute(
     repository_url="https://github.com/user/repo.git",
-    branch="main"
+    branch="main",
+    credentials=GitCredentials(
+        provider=GitProvider.GITHUB,
+        token="your_token_here"
+    )
 )
 
-print(f"Services detected: {mar_result['services_detected']}")
-print(f"Files to modify: {mar_result['files_affected']}")
-print(f"Confidence score: {mar_result['confidence_score']}")
+print(f"Repository ID: {result['repository_id']}")
+print(f"Services detected: {len(result['mar'].services_detected)}")
+print(f"Files to modify: {result['mar'].files_to_modify_count}")
+print(f"Confidence: {result['mar'].confidence_score:.1%}")
 
-# Step 2: Execute migration (if confidence is high)
-if mar_result['confidence_score'] > 0.8:
-    pr_result = migration_engine.migrate_repository(
-        repository_url="https://github.com/user/repo.git",
-        branch="main",
-        migration_plan=mar_result
-    )
-    print(f"PR created: {pr_result['pr_url']}")
-    print(f"Branch: {pr_result['branch_name']}")
+# Step 2: Execute migration
+migrate_uc = ExecuteRepositoryMigrationUseCase()
+migration_result = migrate_uc.execute(
+    repository_id=result['repository_id'],
+    mar=result['mar'],
+    services_to_migrate=['s3', 'lambda'],  # Optional: specific services
+    run_tests=True
+)
+
+print(f"Files changed: {migration_result['total_files_changed']}")
+print(f"Test results: {migration_result.get('test_results')}")
 ```
 
 ### File/Codebase-Level Migration Example
@@ -194,13 +225,32 @@ print(f"Success: {result['verification_result']['success']}")
 # Get supported services
 curl http://localhost:8000/api/services
 
-# Migrate code
+# Migrate code snippet
 curl -X POST http://localhost:8000/api/migrate \
   -H "Content-Type: application/json" \
   -d '{
     "code": "import boto3\ns3 = boto3.client(\"s3\")",
     "language": "python",
-    "services": ["s3"]
+    "services": ["s3"],
+    "cloud_provider": "aws"
+  }'
+
+# Analyze repository
+curl -X POST http://localhost:8000/api/repository/analyze \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repository_url": "https://github.com/user/repo.git",
+    "branch": "main",
+    "token": "your_token"
+  }'
+
+# Execute repository migration
+curl -X POST http://localhost:8000/api/repository/{repository_id}/migrate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "services": ["s3", "lambda"],
+    "create_pr": true,
+    "run_tests": true
   }'
 
 # Check migration status
@@ -213,23 +263,19 @@ curl http://localhost:8000/api/migration/{migration_id}
 
 Key variables in `.env`:
 
-- `LLM_PROVIDER`: `mock`, `openai`, or `anthropic` (default: `mock`)
+- `LLM_PROVIDER`: `gemini` (default: `mock`)
+- `GEMINI_API_KEY`: Your Google Gemini API key (required for LLM features)
 - `TEST_RUNNER`: `mock`, `pytest`, or `unittest` (default: `mock`)
 - `LOG_LEVEL`: `DEBUG`, `INFO`, `WARNING`, `ERROR` (default: `INFO`)
 
-### Using Real LLM Providers
+### Using Gemini LLM Provider
 
-1. **OpenAI:**
-   ```bash
-   export LLM_PROVIDER=openai
-   export OPENAI_API_KEY=your_key_here
-   ```
+```bash
+export LLM_PROVIDER=gemini
+export GEMINI_API_KEY=your_gemini_api_key_here
+```
 
-2. **Anthropic:**
-   ```bash
-   export LLM_PROVIDER=anthropic
-   export ANTHROPIC_API_KEY=your_key_here
-   ```
+**Note**: The system uses TOON format automatically to optimize token usage, reducing Gemini API costs by 70-75%.
 
 ### Using Real Test Runner
 
