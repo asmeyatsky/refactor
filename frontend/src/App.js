@@ -35,7 +35,7 @@ import InputMethodSelection from './components/InputMethodSelection';
 import CodeSnippetInput from './components/CodeSnippetInput';
 import RepositoryInput from './components/RepositoryInput';
 import MigrationResults from './components/MigrationResults';
-import { analyzeRepository, migrateRepository, migrateCodeSnippet } from './api/client';
+import { analyzeRepository, migrateRepository, migrateCodeSnippet, getMigrationStatus } from './api/client';
 
 const theme = createTheme({
   palette: {
@@ -63,7 +63,7 @@ const theme = createTheme({
   },
 });
 
-const steps = ['Select Cloud Provider', 'Choose Input Method', 'Provide Code/Repository', 'Review & Migrate'];
+const steps = ['Select Cloud Provider', 'Choose Input Method', 'Provide Code/Repository', 'Review & Refactor'];
 
 const App = () => {
   const [activeStep, setActiveStep] = useState(0);
@@ -90,7 +90,7 @@ const App = () => {
     }
     if (activeStep === 2) {
       if (inputMethod === 'code' && !codeSnippet.trim()) {
-        setError('Please provide code to migrate');
+        setError('Please provide code to refactor');
         return;
       }
       if (inputMethod === 'repository' && !repositoryUrl.trim()) {
@@ -153,12 +153,64 @@ const App = () => {
     try {
       let result;
       if (inputMethod === 'code') {
-        result = await migrateCodeSnippet({
+        // Start migration and get migration_id
+        const initialResponse = await migrateCodeSnippet({
           code: codeSnippet,
           language,
           services: selectedServices,
           cloudProvider
         });
+        
+        // Poll for completion
+        const migrationId = initialResponse.migration_id;
+        if (migrationId) {
+          let pollInterval;
+          let timeoutId;
+          
+          // Poll every 1 second until completed
+          pollInterval = setInterval(async () => {
+            try {
+              const statusResponse = await getMigrationStatus(migrationId);
+              
+              if (statusResponse.status === 'completed') {
+                clearInterval(pollInterval);
+                if (timeoutId) clearTimeout(timeoutId);
+                // Extract refactored code and format result
+                const finalResult = {
+                  success: true,
+                  refactored_code: statusResponse.refactored_code || statusResponse.result?.refactored_code,
+                  variable_mapping: statusResponse.variable_mapping || statusResponse.result?.variable_mapping,
+                  migration_id: migrationId,
+                  ...statusResponse.result
+                };
+                setMigrationResult(finalResult);
+                setActiveStep(3);
+                setLoading(false);
+              } else if (statusResponse.status === 'failed') {
+                clearInterval(pollInterval);
+                if (timeoutId) clearTimeout(timeoutId);
+                setError(statusResponse.result?.error || 'Refactoring failed');
+                setLoading(false);
+              }
+              // If still pending or in_progress, continue polling
+            } catch (pollError) {
+              console.error('Polling error:', pollError);
+              // Continue polling on error
+            }
+          }, 1000); // Poll every 1 second
+          
+          // Set timeout after 60 seconds
+          timeoutId = setTimeout(() => {
+            clearInterval(pollInterval);
+              setError('Refactoring timeout - please check the refactoring status manually');
+            setLoading(false);
+          }, 60000);
+        } else {
+          // Fallback if no migration_id
+          setMigrationResult(initialResponse);
+          setActiveStep(3);
+          setLoading(false);
+        }
       } else {
         // Repository migration
         if (!analysisResult || !analysisResult.repository_id) {
@@ -171,12 +223,15 @@ const App = () => {
           services: selectedServices,
           createPR: false
         });
+        console.log('App.js - Migration result received:', result);
+        console.log('App.js - refactored_files:', result?.refactored_files);
+        console.log('App.js - files_changed:', result?.files_changed);
+        setMigrationResult(result);
+        setActiveStep(3);
+        setLoading(false);
       }
-      setMigrationResult(result);
-      setActiveStep(3);
     } catch (err) {
-      setError(err.message || 'Migration failed');
-    } finally {
+      setError(err.message || 'Refactoring failed');
       setLoading(false);
     }
   };
@@ -329,7 +384,7 @@ const App = () => {
                         startIcon={<AutoAwesomeIcon />}
                         sx={{ minWidth: 150 }}
                       >
-                        New Migration
+                        New Refactoring
                       </Button>
                     ) : activeStep === 2 ? (
                       <Button
@@ -340,7 +395,7 @@ const App = () => {
                         startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <CloudUploadIcon />}
                         sx={{ minWidth: 150 }}
                       >
-                        {loading ? 'Migrating...' : 'Start Migration'}
+                        {loading ? 'Refactoring...' : 'Start Refactoring'}
                       </Button>
                     ) : (
                       <Button

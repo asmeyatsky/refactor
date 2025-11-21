@@ -82,13 +82,89 @@ class GitAdapter:
         
         return url
     
+    def get_default_branch(self, url: str) -> str:
+        """
+        Get the default branch of a repository
+        
+        Args:
+            url: Repository URL
+            
+        Returns:
+            Default branch name (usually 'main' or 'master')
+        """
+        provider = self.detect_provider(url)
+        normalized_url = self.normalize_url(url, provider)
+        
+        # Prepare authentication
+        env = os.environ.copy()
+        if self.credentials:
+            if self.credentials.token:
+                if provider == GitProvider.GITHUB:
+                    normalized_url = normalized_url.replace('https://', f'https://{self.credentials.token}@')
+                elif provider == GitProvider.GITLAB:
+                    normalized_url = normalized_url.replace('https://', f'https://oauth2:{self.credentials.token}@')
+                elif provider == GitProvider.BITBUCKET:
+                    if self.credentials.username and self.credentials.password:
+                        normalized_url = normalized_url.replace('https://', f'https://{self.credentials.username}:{self.credentials.password}@')
+            
+            if self.credentials.ssh_key_path:
+                env['GIT_SSH_COMMAND'] = f'ssh -i {self.credentials.ssh_key_path} -o StrictHostKeyChecking=no'
+        
+        try:
+            # List remote branches to find default
+            cmd = ['git', 'ls-remote', '--heads', normalized_url]
+            result = subprocess.run(
+                cmd,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            
+            if result.returncode == 0:
+                # Parse output to find default branch
+                lines = result.stdout.strip().split('\n')
+                if lines and lines[0]:
+                    # Try to detect default branch (usually HEAD points to it)
+                    # First, try to get HEAD reference
+                    cmd_head = ['git', 'ls-remote', '--symref', normalized_url, 'HEAD']
+                    result_head = subprocess.run(
+                        cmd_head,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+                    
+                    if result_head.returncode == 0:
+                        for line in result_head.stdout.split('\n'):
+                            if 'ref: refs/heads/' in line:
+                                default_branch = line.split('refs/heads/')[-1].split()[0]
+                                return default_branch
+                    
+                    # Fallback: check common branch names
+                    branches = [line.split('refs/heads/')[-1] for line in lines if 'refs/heads/' in line]
+                    if 'main' in branches:
+                        return 'main'
+                    elif 'master' in branches:
+                        return 'master'
+                    elif branches:
+                        return branches[0]  # Return first branch found
+            
+            # Default fallback
+            return 'main'
+            
+        except Exception:
+            # If detection fails, return default
+            return 'main'
+    
     def clone_repository(self, url: str, branch: str = "main", target_dir: Optional[str] = None) -> str:
         """
         Clone a Git repository
         
         Args:
             url: Repository URL
-            branch: Branch to clone
+            branch: Branch to clone (if None or empty, will auto-detect default branch)
             target_dir: Target directory (optional, uses temp if not provided)
             
         Returns:
@@ -100,6 +176,10 @@ class GitAdapter:
         if target_dir is None:
             repo_name = self._extract_repo_name(url)
             target_dir = os.path.join(self.temp_dir, repo_name)
+        
+        # Auto-detect default branch if branch is not specified or empty
+        if not branch or branch.strip() == "":
+            branch = self.get_default_branch(url)
         
         # Prepare authentication
         env = os.environ.copy()
@@ -129,12 +209,82 @@ class GitAdapter:
             
             if result.returncode != 0:
                 error_msg = result.stderr
-                if 'Authentication failed' in error_msg or 'Permission denied' in error_msg:
-                    raise AuthenticationError(f"Authentication failed for {url}: {error_msg}")
-                elif 'not found' in error_msg.lower() or 'does not exist' in error_msg.lower():
-                    raise RepositoryNotFoundError(f"Repository not found: {url}")
+                stdout_msg = result.stdout
+                full_error = f"{stdout_msg}\n{error_msg}" if stdout_msg else error_msg
+                
+                # Check for specific error patterns
+                error_lower = full_error.lower()
+                
+                if 'authentication failed' in error_lower or 'permission denied' in error_lower or '401' in error_lower:
+                    raise AuthenticationError(
+                        f"Authentication failed for {url}. "
+                        f"The repository may be private. Please provide a valid token or credentials. "
+                        f"Error: {error_msg}"
+                    )
+                elif 'not found' in error_lower or 'does not exist' in error_lower or '404' in error_lower:
+                    # Check if it's a branch issue - try auto-detecting default branch
+                    if 'branch' in error_lower or f"'{branch}'" in error_msg or 'could not find remote branch' in error_lower:
+                        # Try to detect default branch and retry with it
+                        try:
+                            default_branch = self.get_default_branch(url)
+                            if default_branch != branch:
+                                # Retry with default branch
+                                cmd_retry = ['git', 'clone', '--branch', default_branch, '--depth', '1', normalized_url, target_dir]
+                                result_retry = subprocess.run(
+                                    cmd_retry,
+                                    env=env,
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=300
+                                )
+                                
+                                if result_retry.returncode == 0:
+                                    # Successfully cloned with default branch
+                                    return target_dir
+                                else:
+                                    # Still failed, raise error with suggestion
+                                    raise RepositoryNotFoundError(
+                                        f"Branch '{branch}' not found in repository {url}. "
+                                        f"Attempted to use default branch '{default_branch}' but that also failed. "
+                                        f"Error: {result_retry.stderr}"
+                                    )
+                        except RepositoryNotFoundError:
+                            raise  # Re-raise if we already raised RepositoryNotFoundError
+                        except Exception:
+                            pass  # If detection/retry fails, continue with generic error
+                    
+                    # Provide helpful suggestions
+                    suggestions = []
+                    if not url.endswith('.git'):
+                        suggestions.append(f"Try: {url}.git")
+                    suggestions.append("Verify the repository URL is correct")
+                    suggestions.append("Check if the repository is private (requires authentication)")
+                    suggestions.append("Try auto-detecting the default branch (leave branch empty)")
+                    
+                    suggestion_text = " Suggestions: " + "; ".join(suggestions) if suggestions else ""
+                    raise RepositoryNotFoundError(
+                        f"Repository not found: {url}. "
+                        f"This could mean: (1) The repository doesn't exist, (2) The repository is private and requires authentication, "
+                        f"(3) The branch '{branch}' doesn't exist.{suggestion_text} "
+                        f"Error: {error_msg}"
+                    )
+                elif 'could not read' in error_lower or 'remote end hung up' in error_lower:
+                    raise GitAdapterError(
+                        f"Network error while cloning {url}. "
+                        f"Please check your internet connection and try again. "
+                        f"Error: {error_msg}"
+                    )
+                elif 'timeout' in error_lower:
+                    raise GitAdapterError(
+                        f"Timeout while cloning {url}. "
+                        f"The repository may be too large or the network is slow. "
+                        f"Error: {error_msg}"
+                    )
                 else:
-                    raise GitAdapterError(f"Failed to clone repository: {error_msg}")
+                    raise GitAdapterError(
+                        f"Failed to clone repository {url}. "
+                        f"Error: {error_msg}"
+                    )
             
             return target_dir
             

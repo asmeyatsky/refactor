@@ -237,23 +237,53 @@ class ExtendedASTTransformationEngine:
             
             # Fix indentation for code blocks that were inserted
             # Check if this looks like a standalone code block that should be indented
-            if stripped.startswith(('import ', 'from ', 'bucket =', 'blob =', 'topic_path =', 'subscriber =')):
+            if stripped.startswith(('import ', 'from ', 'bucket =', 'blob =', 'topic_path =', 'subscriber =', 'storage_client =', 'gcs_client =')):
                 # Check if we're inside a function (previous non-empty line ends with :)
                 if i > 0:
                     prev_non_empty = None
+                    prev_indent = ''
                     for j in range(i-1, -1, -1):
                         if lines[j].strip() and not lines[j].strip().startswith('#'):
                             prev_non_empty = lines[j]
+                            prev_indent = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
                             break
                     if prev_non_empty and prev_non_empty.rstrip().endswith(':'):
-                        # Should be indented
-                        if not line.startswith('    '):
-                            fixed_lines.append('    ' + stripped)
+                        # Should be indented - use the same indentation as previous line + 4 spaces
+                        expected_indent = prev_indent + '    '
+                        if not line.startswith(expected_indent):
+                            fixed_lines.append(expected_indent + stripped)
+                            continue
+                    elif prev_non_empty:
+                        # Use same indentation as previous non-empty line
+                        if not line.startswith(prev_indent):
+                            fixed_lines.append(prev_indent + stripped)
                             continue
             
             fixed_lines.append(line)
         
         fixed = '\n'.join(fixed_lines)
+        
+        # Remove duplicate client initializations with incorrect indentation
+        # Pattern: line with excessive indentation followed by same line with correct indentation
+        lines = fixed.split('\n')
+        cleaned_lines = []
+        seen_client_init = set()
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            # Check if this is a duplicate client initialization
+            if stripped.startswith(('gcs_client = storage.Client()', 'storage_client = storage.Client()')):
+                # Check if we've seen this before
+                if stripped in seen_client_init:
+                    # Skip this duplicate
+                    continue
+                # Check if indentation is wrong (more than 12 spaces)
+                indent = line[:len(line) - len(line.lstrip())]
+                if len(indent) > 12:
+                    # Skip this incorrectly indented duplicate
+                    continue
+                seen_client_init.add(stripped)
+            cleaned_lines.append(line)
+        fixed = '\n'.join(cleaned_lines)
         
         # Fix double assignments (e.g., "response = bucket = ...")
         fixed = re.sub(r'(\w+)\s*=\s*(\w+)\s*=\s*', r'\1 = ', fixed)
@@ -307,6 +337,86 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         from config import config
         self.gcp_project_id = config.GCP_PROJECT_ID
         self.gcp_region = config.GCP_REGION
+    
+    def _get_aws_to_gcp_region_mapping(self) -> dict:
+        """Get comprehensive mapping of AWS regions to Google Cloud Storage locations.
+        
+        Returns:
+            dict: Mapping of AWS region names to GCP location names
+        """
+        return {
+            # US Regions
+            'us-east-1': 'US-EAST1',      # N. Virginia -> US East (South Carolina)
+            'us-east-2': 'US-EAST4',      # Ohio -> US East (N. Virginia)
+            'us-west-1': 'US-WEST1',      # N. California -> US West (Oregon)
+            'us-west-2': 'US-WEST1',      # Oregon -> US West (Oregon) - closest match
+            
+            # Europe Regions
+            'eu-west-1': 'EUROPE-WEST1',  # Ireland -> Europe West (Belgium)
+            'eu-west-2': 'EUROPE-WEST2',  # London -> Europe West (London)
+            'eu-west-3': 'EUROPE-WEST3',  # Paris -> Europe West (Frankfurt)
+            'eu-central-1': 'EUROPE-WEST3',  # Frankfurt -> Europe West (Frankfurt)
+            'eu-central-2': 'EUROPE-CENTRAL2',  # Zurich -> Europe Central (Warsaw)
+            'eu-north-1': 'EUROPE-NORTH1',  # Stockholm -> Europe North (Finland)
+            'eu-south-1': 'EUROPE-WEST4',  # Milan -> Europe West (Netherlands)
+            'eu-south-2': 'EUROPE-WEST4',  # Spain -> Europe West (Netherlands)
+            
+            # Asia Pacific Regions
+            'ap-southeast-1': 'ASIA-SOUTHEAST1',  # Singapore -> Asia Southeast (Singapore)
+            'ap-southeast-2': 'AUSTRALIA-SOUTHEAST1',  # Sydney -> Australia Southeast (Sydney)
+            'ap-southeast-3': 'ASIA-SOUTHEAST2',  # Jakarta -> Asia Southeast (Jakarta)
+            'ap-southeast-4': 'AUSTRALIA-SOUTHEAST2',  # Melbourne -> Australia Southeast (Melbourne)
+            'ap-southeast-5': 'ASIA-SOUTHEAST1',  # Bangkok -> Asia Southeast (Singapore) - closest
+            'ap-northeast-1': 'ASIA-NORTHEAST1',  # Tokyo -> Asia Northeast (Tokyo)
+            'ap-northeast-2': 'ASIA-NORTHEAST2',  # Seoul -> Asia Northeast (Osaka)
+            'ap-northeast-3': 'ASIA-NORTHEAST3',  # Osaka -> Asia Northeast (Seoul)
+            'ap-south-1': 'ASIA-SOUTH1',  # Mumbai -> Asia South (Mumbai)
+            'ap-south-2': 'ASIA-SOUTH1',  # Hyderabad -> Asia South (Mumbai) - closest
+            'ap-east-1': 'ASIA-EAST1',    # Hong Kong -> Asia East (Taiwan)
+            
+            # Middle East Regions
+            'me-south-1': 'ASIA-SOUTH1',     # Bahrain -> Asia South (Mumbai) - closest
+            'me-central-1': 'ASIA-SOUTH1',   # UAE -> Asia South (Mumbai) - closest
+            'me-central-2': 'ASIA-SOUTH1',   # UAE -> Asia South (Mumbai) - closest
+            
+            # South America Regions
+            'sa-east-1': 'SOUTHAMERICA-EAST1',  # São Paulo -> South America East (São Paulo)
+            
+            # Canada Regions
+            'ca-central-1': 'US-EAST1',      # Montreal -> US East (South Carolina) - closest
+            'ca-west-1': 'US-WEST1',      # Calgary -> US West (Oregon) - closest
+            
+            # Africa Regions
+            'af-south-1': 'EUROPE-WEST1',  # Cape Town -> Europe West (Belgium) - closest geographically
+            
+            # China Regions (special handling - may need different credentials)
+            'cn-north-1': 'ASIA-NORTHEAST1',  # Beijing -> Asia Northeast (Tokyo) - closest
+            'cn-northwest-1': 'ASIA-NORTHEAST1',  # Ningxia -> Asia Northeast (Tokyo) - closest
+            
+            # Israel Regions
+            'il-central-1': 'EUROPE-WEST1',  # Tel Aviv -> Europe West (Belgium) - closest
+            
+            # Default fallback
+            'default': 'US',  # Default to US multi-region
+        }
+    
+    def _map_aws_region_to_gcp_location(self, aws_region: str) -> str:
+        """Map an AWS region to the closest GCP Cloud Storage location.
+        
+        Args:
+            aws_region: AWS region name (e.g., 'us-east-1', 'eu-west-1')
+            
+        Returns:
+            str: GCP location name (e.g., 'US-EAST1', 'EUROPE-WEST1')
+        """
+        # Normalize the AWS region (remove quotes, whitespace)
+        aws_region = aws_region.strip().strip('\'"').lower()
+        
+        # Get the mapping
+        region_map = self._get_aws_to_gcp_region_mapping()
+        
+        # Standard mapping
+        return region_map.get(aws_region, region_map.get('default', 'US'))
     
     def transform(self, code: str, recipe: Dict[str, Any]) -> str:
         """Transform Python code based on the recipe"""
@@ -489,6 +599,86 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
 
         return result_code
     
+    def _get_aws_to_gcp_region_mapping(self) -> dict:
+        """Get comprehensive mapping of AWS regions to Google Cloud Storage locations.
+        
+        Returns:
+            dict: Mapping of AWS region names to GCP location names
+        """
+        return {
+            # US Regions
+            'us-east-1': 'US-EAST1',      # N. Virginia -> US East (South Carolina)
+            'us-east-2': 'US-EAST4',      # Ohio -> US East (N. Virginia)
+            'us-west-1': 'US-WEST1',      # N. California -> US West (Oregon)
+            'us-west-2': 'US-WEST1',      # Oregon -> US West (Oregon) - closest match
+            
+            # Europe Regions
+            'eu-west-1': 'EUROPE-WEST1',  # Ireland -> Europe West (Belgium)
+            'eu-west-2': 'EUROPE-WEST2',  # London -> Europe West (London)
+            'eu-west-3': 'EUROPE-WEST3',  # Paris -> Europe West (Frankfurt)
+            'eu-central-1': 'EUROPE-WEST3',  # Frankfurt -> Europe West (Frankfurt)
+            'eu-central-2': 'EUROPE-CENTRAL2',  # Zurich -> Europe Central (Warsaw)
+            'eu-north-1': 'EUROPE-NORTH1',  # Stockholm -> Europe North (Finland)
+            'eu-south-1': 'EUROPE-WEST4',  # Milan -> Europe West (Netherlands)
+            'eu-south-2': 'EUROPE-WEST4',  # Spain -> Europe West (Netherlands)
+            
+            # Asia Pacific Regions
+            'ap-southeast-1': 'ASIA-SOUTHEAST1',  # Singapore -> Asia Southeast (Singapore)
+            'ap-southeast-2': 'AUSTRALIA-SOUTHEAST1',  # Sydney -> Australia Southeast (Sydney)
+            'ap-southeast-3': 'ASIA-SOUTHEAST2',  # Jakarta -> Asia Southeast (Jakarta)
+            'ap-southeast-4': 'AUSTRALIA-SOUTHEAST2',  # Melbourne -> Australia Southeast (Melbourne)
+            'ap-southeast-5': 'ASIA-SOUTHEAST1',  # Bangkok -> Asia Southeast (Singapore) - closest
+            'ap-northeast-1': 'ASIA-NORTHEAST1',  # Tokyo -> Asia Northeast (Tokyo)
+            'ap-northeast-2': 'ASIA-NORTHEAST2',  # Seoul -> Asia Northeast (Osaka)
+            'ap-northeast-3': 'ASIA-NORTHEAST3',  # Osaka -> Asia Northeast (Seoul)
+            'ap-south-1': 'ASIA-SOUTH1',  # Mumbai -> Asia South (Mumbai)
+            'ap-south-2': 'ASIA-SOUTH1',  # Hyderabad -> Asia South (Mumbai) - closest
+            'ap-east-1': 'ASIA-EAST1',    # Hong Kong -> Asia East (Taiwan)
+            
+            # Middle East Regions
+            'me-south-1': 'ASIA-SOUTH1',     # Bahrain -> Asia South (Mumbai) - closest
+            'me-central-1': 'ASIA-SOUTH1',   # UAE -> Asia South (Mumbai) - closest
+            'me-central-2': 'ASIA-SOUTH1',   # UAE -> Asia South (Mumbai) - closest
+            
+            # South America Regions
+            'sa-east-1': 'SOUTHAMERICA-EAST1',  # São Paulo -> South America East (São Paulo)
+            
+            # Canada Regions
+            'ca-central-1': 'US-EAST1',      # Montreal -> US East (South Carolina) - closest
+            'ca-west-1': 'US-WEST1',      # Calgary -> US West (Oregon) - closest
+            
+            # Africa Regions
+            'af-south-1': 'EUROPE-WEST1',  # Cape Town -> Europe West (Belgium) - closest geographically
+            
+            # China Regions (special handling - may need different credentials)
+            'cn-north-1': 'ASIA-NORTHEAST1',  # Beijing -> Asia Northeast (Tokyo) - closest
+            'cn-northwest-1': 'ASIA-NORTHEAST1',  # Ningxia -> Asia Northeast (Tokyo) - closest
+            
+            # Israel Regions
+            'il-central-1': 'EUROPE-WEST1',  # Tel Aviv -> Europe West (Belgium) - closest
+            
+            # Default fallback
+            'default': 'US',  # Default to US multi-region
+        }
+    
+    def _map_aws_region_to_gcp_location(self, aws_region: str) -> str:
+        """Map an AWS region to the closest GCP Cloud Storage location.
+        
+        Args:
+            aws_region: AWS region name (e.g., 'us-east-1', 'eu-west-1')
+            
+        Returns:
+            str: GCP location name (e.g., 'US-EAST1', 'EUROPE-WEST1')
+        """
+        # Normalize the AWS region (remove quotes, whitespace)
+        aws_region = aws_region.strip().strip('\'"').lower()
+        
+        # Get the mapping
+        region_map = self._get_aws_to_gcp_region_mapping()
+        
+        # Standard mapping
+        return region_map.get(aws_region, region_map.get('default', 'US'))
+    
     def _migrate_s3_to_gcs(self, code: str) -> tuple[str, dict]:
         """Migrate AWS S3 to Google Cloud Storage with improved structure and variable naming.
         
@@ -543,6 +733,291 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Replace boto3 imports with GCS imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import storage', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import storage', code, flags=re.MULTILINE)
+        
+        # IMPORTANT: Replace S3 API method calls BEFORE client variable renaming
+        # This ensures we catch patterns like s3.create_bucket() before s3 is renamed to gcs_client
+        
+        # Replace S3 create_bucket -> GCS bucket.create() FIRST (before variable renaming)
+        # Pattern: s3.create_bucket(Bucket='bucket-name', CreateBucketConfiguration={'LocationConstraint': 'us-east-1'})
+        def replace_create_bucket_early(match):
+            full_match = match.group(0)
+            # Extract bucket name - could be a variable name or string literal
+            bucket_name_expr = match.group(2).strip()
+            
+            # Extract location from CreateBucketConfiguration if present
+            location = None
+            location_config_match = re.search(r'CreateBucketConfiguration\s*=\s*\{[^}]*LocationConstraint[^}]*:\s*([^,}]+)', full_match)
+            if location_config_match:
+                location_value = location_config_match.group(1).strip().strip('\'"')
+                # Map AWS regions to GCP locations using comprehensive mapping
+                location = self._map_aws_region_to_gcp_location(location_value)
+            
+            # Check for region parameter in function signature (if location not found)
+            if location is None:
+                region_match = re.search(r'region\s*=\s*[\'"]([^\'"]+)[\'"]', code)
+                if region_match:
+                    aws_region = region_match.group(1)
+                    location = self._map_aws_region_to_gcp_location(aws_region)
+            
+            # bucket_name_expr might be a variable name (like bucket_name) or a string literal
+            # Keep it as-is if it's a variable, otherwise ensure it's a string
+            if bucket_name_expr.startswith("'") or bucket_name_expr.startswith('"'):
+                bucket_name_str = bucket_name_expr  # Already a string literal
+            else:
+                bucket_name_str = bucket_name_expr  # Variable name - use as-is
+            
+            # Build replacement code - use correct GCS API: storage_client.create_bucket(bucket_name, location=location)
+            if location:
+                return f'storage_client = storage.Client()\nbucket = storage_client.create_bucket({bucket_name_str}, location=\'{location}\')\nprint(f"Bucket \'{{bucket.name}}\' created successfully in location \'{location}\'.")'
+            else:
+                return f'storage_client = storage.Client()\nbucket = storage_client.create_bucket({bucket_name_str})\nprint(f"Bucket \'{{bucket.name}}\' created successfully.")'
+        
+        # Match create_bucket BEFORE variable renaming
+        # Handle: s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={'LocationConstraint': region})
+        # Use a more robust approach: match the entire create_bucket call and parse it manually
+        def replace_create_bucket_robust(match):
+            full_match = match.group(0)
+            client_var = match.group(1)
+            
+            # Extract bucket name - could be Bucket=bucket_name or just bucket_name
+            bucket_match = re.search(r'Bucket\s*=\s*([^,)]+)', full_match)
+            if bucket_match:
+                bucket_name_expr = bucket_match.group(1).strip()
+            else:
+                # Try to extract first parameter if Bucket= is not present
+                param_match = re.search(r'create_bucket\(\s*([^,)]+)', full_match)
+                bucket_name_expr = param_match.group(1).strip() if param_match else 'bucket_name'
+            
+            # Extract location from CreateBucketConfiguration
+            location = None
+            config_match = re.search(r'CreateBucketConfiguration\s*=\s*\{([^}]+)\}', full_match)
+            if config_match:
+                config_content = config_match.group(1)
+                location_match = re.search(r'LocationConstraint\s*:\s*([^,}]+)', config_content)
+                if location_match:
+                    location_value = location_match.group(1).strip().strip('\'"')
+                    # If it's a string literal, map it directly
+                    if location_value and (location_value.startswith("'") or location_value.startswith('"')):
+                        location_value = location_value.strip('\'"')
+                        location = self._map_aws_region_to_gcp_location(location_value)
+                    else:
+                        # It's a variable - try to find its value
+                        var_name = location_value.strip()
+                        var_match = re.search(rf'{re.escape(var_name)}\s*=\s*[\'"]([^\'"]+)[\'"]', code)
+                        if var_match:
+                            aws_region = var_match.group(1)
+                            location = self._map_aws_region_to_gcp_location(aws_region)
+            
+            # Check function parameter default value if location still not found
+            if location is None:
+                region_match = re.search(r'region\s*=\s*[\'"]([^\'"]+)[\'"]', code)
+                if region_match:
+                    aws_region = region_match.group(1)
+                    location = self._map_aws_region_to_gcp_location(aws_region)
+            
+            # Preserve bucket_name_expr as-is (variable or string literal)
+            bucket_name_str = bucket_name_expr.strip()
+            
+            # Build replacement - preserve indentation by detecting it from the original line
+            lines = code.split('\n')
+            indent = ''
+            for line in lines:
+                if full_match.strip() in line:
+                    # Extract indentation from the line containing the match
+                    indent = line[:len(line) - len(line.lstrip())]
+                    break
+            
+            if location:
+                # Correct GCS API: storage_client.create_bucket(bucket_name, location=location)
+                replacement = f'{indent}storage_client = storage.Client()\n{indent}bucket = storage_client.create_bucket({bucket_name_str}, location=\'{location}\')\n{indent}print(f"Bucket \'{{bucket.name}}\' created successfully in location \'{location}\'.")'
+            else:
+                # Default location is 'US' for GCS
+                replacement = f'{indent}storage_client = storage.Client()\n{indent}bucket = storage_client.create_bucket({bucket_name_str})\n{indent}print(f"Bucket \'{{bucket.name}}\' created successfully.")'
+            
+            return replacement
+        
+        # Match create_bucket with Bucket parameter and optional CreateBucketConfiguration
+        # Use a balanced parentheses approach to handle nested structures properly
+        def find_balanced_parens(text, start_pos):
+            """Find the position of the matching closing paren for an opening paren."""
+            depth = 0
+            pos = start_pos
+            while pos < len(text):
+                if text[pos] == '(':
+                    depth += 1
+                elif text[pos] == ')':
+                    depth -= 1
+                    if depth == 0:
+                        return pos
+                pos += 1
+            return -1
+        
+        # Find and replace all create_bucket calls using balanced parentheses
+        create_bucket_pattern = r'(\w+)\.create_bucket\('
+        matches = list(re.finditer(create_bucket_pattern, code))
+        # Process matches in reverse order to avoid index shifting issues
+        for match in reversed(matches):
+            start_pos = match.end() - 1  # Position of opening paren
+            end_pos = find_balanced_parens(code, start_pos)
+            if end_pos > 0:
+                full_call = code[match.start():end_pos+1]
+                # Extract information from the full call
+                client_var = match.group(1)
+                
+                # Extract bucket name
+                bucket_match = re.search(r'Bucket\s*=\s*([^,)]+)', full_call)
+                if bucket_match:
+                    bucket_name_expr = bucket_match.group(1).strip()
+                else:
+                    # Try first parameter
+                    param_match = re.search(r'create_bucket\(\s*([^,)]+)', full_call)
+                    bucket_name_expr = param_match.group(1).strip() if param_match else 'bucket_name'
+                
+                # Extract location from CreateBucketConfiguration
+                location = None
+                config_match = re.search(r'CreateBucketConfiguration\s*=\s*\{([^}]+)\}', full_call)
+                if config_match:
+                    config_content = config_match.group(1)
+                    location_match = re.search(r'LocationConstraint\s*:\s*([^,}]+)', config_content)
+                    if location_match:
+                        location_value = location_match.group(1).strip().strip('\'"')
+                        if location_value and (location_value.startswith("'") or location_value.startswith('"')):
+                            location_value = location_value.strip('\'"')
+                            location = self._map_aws_region_to_gcp_location(location_value)
+                        else:
+                            # Variable - find its value
+                            var_name = location_value.strip()
+                            var_match = re.search(rf'{re.escape(var_name)}\s*=\s*[\'"]([^\'"]+)[\'"]', code)
+                            if var_match:
+                                aws_region = var_match.group(1)
+                                location = self._map_aws_region_to_gcp_location(aws_region)
+                
+                # Check function parameter default
+                if location is None:
+                    region_match = re.search(r'region\s*=\s*[\'"]([^\'"]+)[\'"]', code)
+                    if region_match:
+                        aws_region = region_match.group(1)
+                        location = self._map_aws_region_to_gcp_location(aws_region)
+                
+                # Get indentation from the line containing the match
+                # Find the line number where the match occurs
+                line_start = code.rfind('\n', 0, match.start())
+                if line_start == -1:
+                    line_start = 0
+                else:
+                    line_start += 1  # Skip the newline
+                # Get the full line containing the match
+                line_end = code.find('\n', match.start())
+                if line_end == -1:
+                    line_end = len(code)
+                match_line = code[line_start:line_end]
+                # Extract indentation from the line containing the match
+                indent = match_line[:len(match_line) - len(match_line.lstrip())]
+                
+                # Build replacement - check if storage_client or gcs_client already exists in scope
+                # If gcs_client exists, reuse it; otherwise create storage_client
+                bucket_name_str = bucket_name_expr.strip()
+                # Check if we already have a storage client variable in the current scope
+                # Look for client initialization in the lines before the match
+                lines_before = code[:match.start()].split('\n')
+                has_storage_client = False
+                client_var_name = 'storage_client'
+                for line in reversed(lines_before):
+                    if 'storage_client = storage.Client()' in line:
+                        has_storage_client = True
+                        client_var_name = 'storage_client'
+                        break
+                    elif 'gcs_client = storage.Client()' in line:
+                        has_storage_client = True
+                        client_var_name = 'gcs_client'
+                        break
+                
+                if location:
+                    # Correct GCS API: storage_client.create_bucket(bucket_name, location=location)
+                    if has_storage_client:
+                        # Reuse existing client
+                        replacement = f'{indent}bucket = {client_var_name}.create_bucket({bucket_name_str}, location=\'{location}\')\n{indent}print(f"Bucket \'{{bucket.name}}\' created successfully in location \'{location}\'.")'
+                    else:
+                        # Create new client - use storage_client for consistency
+                        replacement = f'{indent}storage_client = storage.Client()\n{indent}bucket = storage_client.create_bucket({bucket_name_str}, location=\'{location}\')\n{indent}print(f"Bucket \'{{bucket.name}}\' created successfully in location \'{location}\'.")'
+                else:
+                    # Default location is 'US' for GCS
+                    if has_storage_client:
+                        replacement = f'{indent}bucket = {client_var_name}.create_bucket({bucket_name_str})\n{indent}print(f"Bucket \'{{bucket.name}}\' created successfully.")'
+                    else:
+                        replacement = f'{indent}storage_client = storage.Client()\n{indent}bucket = storage_client.create_bucket({bucket_name_str})\n{indent}print(f"Bucket \'{{bucket.name}}\' created successfully.")'
+                
+                # Remove the old print statement that follows the create_bucket call
+                # Find and remove the next line if it's the old AWS print statement
+                lines_after = code[end_pos+1:].split('\n')
+                # Check if the first non-empty line after the create_bucket call is the old AWS print statement
+                if lines_after and len(lines_after) > 0:
+                    # Find the first non-empty line
+                    first_non_empty_idx = 0
+                    for idx, line in enumerate(lines_after):
+                        if line.strip() and not line.strip().startswith('#'):
+                            first_non_empty_idx = idx
+                            break
+                    first_line_after = lines_after[first_non_empty_idx].strip() if first_non_empty_idx < len(lines_after) else ''
+                    # Check if it's the old AWS print statement about region
+                    if 'created successfully in region' in first_line_after or ('print' in first_line_after and 'region' in first_line_after and 'location' not in first_line_after):
+                        # Remove the old print line
+                        remaining_lines = lines_after[:first_non_empty_idx] + lines_after[first_non_empty_idx+1:]
+                        code = code[:match.start()] + replacement + '\n'.join(remaining_lines)
+                    else:
+                        code = code[:match.start()] + replacement + code[end_pos+1:]
+                else:
+                    code = code[:match.start()] + replacement + code[end_pos+1:]
+                
+                # Remove any duplicate client initializations that might have been created
+                # This happens if boto3.client replacement also ran
+                lines = code.split('\n')
+                cleaned_lines = []
+                seen_storage_client = False
+                seen_gcs_client = False
+                for line in lines:
+                    stripped = line.strip()
+                    indent = line[:len(line) - len(line.lstrip())]
+                    # Check for storage_client duplicates
+                    if stripped == 'storage_client = storage.Client()':
+                        if seen_storage_client:
+                            # Skip duplicate
+                            continue
+                        # Check indentation - should be 8 spaces (inside try block), not 16
+                        if len(indent) > 12:
+                            # Wrong indentation - skip
+                            continue
+                        seen_storage_client = True
+                    # Check for gcs_client duplicates
+                    elif stripped == 'gcs_client = storage.Client()':
+                        if seen_gcs_client:
+                            # Skip duplicate
+                            continue
+                        # Check indentation - should be 8 spaces (inside try block), not 16
+                        if len(indent) > 12:
+                            # Wrong indentation - skip
+                            continue
+                        seen_gcs_client = True
+                    cleaned_lines.append(line)
+                code = '\n'.join(cleaned_lines)
+                
+                # If gcs_client exists but storage_client is referenced, replace storage_client with gcs_client
+                if 'gcs_client = storage.Client()' in code and 'storage_client.create_bucket' in code:
+                    code = code.replace('storage_client.create_bucket', 'gcs_client.create_bucket')
+                if 'gcs_client = storage.Client()' in code and 'storage_client.bucket' in code:
+                    code = code.replace('storage_client.bucket', 'gcs_client.bucket')
+                if 'gcs_client = storage.Client()' in code and 'storage_client.list_blobs' in code:
+                    code = code.replace('storage_client.list_blobs', 'gcs_client.list_blobs')
+                if 'gcs_client = storage.Client()' in code and 'storage_client.get_bucket' in code:
+                    code = code.replace('storage_client.get_bucket', 'gcs_client.get_bucket')
+        
+        # Also handle simple cases without CreateBucketConfiguration (fallback)
+        # Match: s3.create_bucket('bucket-name') or s3.create_bucket(Bucket='name')
+        code = re.sub(
+            r'(\w+)\.create_bucket\(\s*([^,\)]+)\s*\)',
+            replace_create_bucket_early,
+            code
+        )
         
         # Replace boto3.resource('s3') pattern - handle with region_name too
         code = re.sub(
@@ -686,19 +1161,35 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Replace client instantiation AFTER variable renaming
         # Handle boto3.client('s3') with optional region_name and config parameters
         # First, replace s3 = boto3.client('s3') -> gcs_client = storage.Client()
-        code = re.sub(
-            r'\bs3\s*=\s*boto3\.client\([\'\"]s3[\'\"][^\)]*\)',
-            r'gcs_client = storage.Client()  # Use a better name for the GCS client',
-            code,
-            flags=re.DOTALL
-        )
-        # Then handle other variable names
-        code = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"][^\)]*\)',
-            r'\1 = storage.Client()',
-            code,
-            flags=re.DOTALL
-        )
+        # But only if gcs_client doesn't already exist AND the pattern still exists
+        if re.search(r'\bs3\s*=\s*boto3\.client\([\'\"]s3[\'\"][^\)]*\)', code, flags=re.DOTALL):
+            # Check if storage_client or gcs_client already exists - if so, just remove the boto3.client line
+            if 'storage_client = storage.Client()' in code or 'gcs_client = storage.Client()' in code:
+                # Remove the boto3.client line instead of replacing it
+                # Match the entire line including the assignment
+                lines = code.split('\n')
+                cleaned_lines = []
+                for line in lines:
+                    # Skip lines that match s3 = boto3.client('s3', ...)
+                    if re.search(r'\bs3\s*=\s*boto3\.client\([\'\"]s3[\'\"][^\)]*\)', line, flags=re.DOTALL):
+                        continue  # Skip this line
+                    cleaned_lines.append(line)
+                code = '\n'.join(cleaned_lines)
+            else:
+                code = re.sub(
+                    r'\bs3\s*=\s*boto3\.client\([\'\"]s3[\'\"][^\)]*\)',
+                    r'gcs_client = storage.Client()  # Use a better name for the GCS client',
+                    code,
+                    flags=re.DOTALL
+                )
+        # Then handle other variable names - but skip if storage_client or gcs_client already exists
+        if 'storage_client = storage.Client()' not in code and 'gcs_client = storage.Client()' not in code:
+            code = re.sub(
+                r'(\w+)\s*=\s*boto3\.client\([\'\"]s3[\'\"][^\)]*\)',
+                r'\1 = storage.Client()',
+                code,
+                flags=re.DOTALL
+            )
         
         # Replace boto3.resource('s3') if not already replaced - handle with region_name too
         # First, replace s3 = boto3.resource('s3') -> gcs_client = storage.Client()
@@ -791,12 +1282,14 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Replace S3 upload_file -> GCS upload_from_filename with improved structure
         # Pattern: s3_client.upload_file('local_file.txt', 'bucket-name', 'remote_file.txt')
-        # Client var should already be gcs_client at this point
+        # Should become: storage_client = storage.Client(); bucket = storage_client.bucket('bucket-name'); blob = bucket.blob('remote_file.txt'); blob.upload_from_filename('local_file.txt')
         def replace_upload(match):
-            local_file = match.group(2) if len(match.groups()) >= 2 else 'local_file.txt'
-            bucket_name_var = match.group(3) if len(match.groups()) >= 3 else 'bucket_name'
-            remote_file = match.group(4) if len(match.groups()) >= 4 else 'remote_file.txt'
-            return f'### 🚀 Upload file to GCS\nbucket = gcs_client.bucket({bucket_name_var})\nblob = bucket.blob({remote_file})\nblob.upload_from_filename({local_file})\nprint(f"File {{local_file}} uploaded to gs://{{{bucket_name_var}}}/{{{remote_file}}}")'
+            client_var = match.group(1)  # Could be 's3', 'gcs_client', etc.
+            local_file = match.group(2)
+            bucket_name_var = match.group(3)
+            remote_file = match.group(4)
+            # Correct GCS API pattern
+            return f'storage_client = storage.Client()\nbucket = storage_client.bucket({bucket_name_var})\nblob = bucket.blob({remote_file})\nblob.upload_from_filename({local_file})\nprint(f"File \'{local_file}\' uploaded to \'{bucket_name_var}/{remote_file}\' successfully.")'
         code = re.sub(
             r'(\w+)\.upload_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
             replace_upload,
@@ -805,11 +1298,14 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Replace S3 download_file -> GCS download_to_filename with improved structure
         # Pattern: s3_client.download_file('bucket-name', 'remote_file.txt', 'local_file.txt')
+        # Should become: storage_client = storage.Client(); bucket = storage_client.bucket('bucket-name'); blob = bucket.blob('remote_file.txt'); blob.download_to_filename('local_file.txt')
         def replace_download(match):
-            bucket_name_var = match.group(2) if len(match.groups()) >= 2 else 'bucket_name'
-            remote_file = match.group(3) if len(match.groups()) >= 3 else 'remote_file_name'
-            local_file = match.group(4) if len(match.groups()) >= 4 else 'local_download_file'
-            return f'# ---\n\n### 📥 Download file from GCS\n# The bucket and blob objects can be reused, but shown for clarity\nbucket = gcs_client.bucket({bucket_name_var})\nblob = bucket.blob({remote_file})\nblob.download_to_filename({local_file})\nprint(f"File gs://{{{bucket_name_var}}}/{{{remote_file}}} downloaded to {{{local_file}}}")'
+            client_var = match.group(1)
+            bucket_name_var = match.group(2)
+            remote_file = match.group(3)
+            local_file = match.group(4)
+            # Correct GCS API pattern
+            return f'storage_client = storage.Client()\nbucket = storage_client.bucket({bucket_name_var})\nblob = bucket.blob({remote_file})\nblob.download_to_filename({local_file})\nprint(f"File \'{remote_file}\' downloaded from \'{bucket_name_var}\' to \'{local_file}\' successfully.")'
         code = re.sub(
             r'(\w+)\.download_file\([\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"],\s*[\'\"]([^\'\"]+)[\'\"]\)',
             replace_download,
@@ -871,7 +1367,8 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         def replace_delete_object(match):
             bucket_name_var = match.group(2).strip('\'"') if len(match.groups()) >= 2 else 'bucket_name'
             key_var = match.group(3).strip('\'"') if len(match.groups()) >= 3 else 'remote_file_name'
-            return f'# ---\n\n### 🗑️ Delete object from GCS\nbucket = gcs_client.bucket("{bucket_name_var}")\nblob = bucket.blob("{key_var}")\nblob.delete()\nprint(f"Object gs://{{bucket_name}}/{{remote_file_name}} deleted")'
+            # Correct GCS API pattern
+            return f'storage_client = storage.Client()\nbucket = storage_client.bucket("{bucket_name_var}")\nblob = bucket.blob("{key_var}")\nblob.delete()\nprint(f"Object \'{key_var}\' deleted from bucket \'{bucket_name_var}\' successfully.")'
         code = re.sub(
             r'(\w+)\.delete_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
             replace_delete_object,
@@ -880,10 +1377,10 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Replace S3 list_objects_v2 -> GCS list_blobs with improved structure
         # Pattern: response = s3_client.list_objects_v2(Bucket='my-bucket')
-        # Should become: blobs = gcs_client.list_blobs(bucket_name)
+        # Should become: storage_client = storage.Client(); blobs = storage_client.list_blobs(bucket_name)
         def replace_list_objects_v2(match):
-            # Client var should already be gcs_client at this point
-            return f'# ---\n\n### 📜 List objects (Blobs) in bucket\nprint(f\"\\nObjects in bucket {{bucket_name}}:\")\n# The list_blobs() method returns an iterable of Blob objects\nblobs = gcs_client.list_blobs(bucket_name)'
+            # Correct GCS API pattern
+            return f'storage_client = storage.Client()\nblobs = storage_client.list_blobs(bucket_name)\nprint(f"Contents of bucket \'{{bucket_name}}\':")\nfor blob in blobs:\n    print(f"- {{blob.name}}")'
         
         code = re.sub(
             r'(\w+)\s*=\s*(\w+)\.list_objects_v2\(Bucket=([^,\)]+)\)',
@@ -1044,23 +1541,51 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             code
         )
         
-        # Replace S3 create_bucket -> GCS create_bucket with improved structure
-        def replace_create_bucket(match):
-            return f'### 🆕 Create bucket in GCS\nbucket = gcs_client.create_bucket(bucket_name)\nprint(f"Bucket gs://{{bucket_name}} created")'
+        # Replace S3 create_bucket -> GCS bucket.create() (second pass - handles any remaining after variable renaming)
+        # This handles cases where create_bucket wasn't caught in the first pass
+        def replace_create_bucket_late(match):
+            full_match = match.group(0)
+            bucket_name_expr = match.group(2).strip().strip('\'"')
+            
+            location = None
+            location_config_match = re.search(r'CreateBucketConfiguration\s*=\s*\{[^}]*LocationConstraint[^}]*:\s*[\'"]([^\'"]+)[\'"]', full_match)
+            if location_config_match:
+                aws_region = location_config_match.group(1)
+                location = self._map_aws_region_to_gcp_location(aws_region)
+            
+            if location is None:
+                region_match = re.search(r'region\s*=\s*[\'"]([^\'"]+)[\'"]', code)
+                if region_match:
+                    aws_region = region_match.group(1)
+                    location = self._map_aws_region_to_gcp_location(aws_region)
+            
+            bucket_name_str = f"'{bucket_name_expr}'" if not bucket_name_expr.startswith("'") and not bucket_name_expr.startswith('"') else bucket_name_expr
+            
+            if location:
+                # Correct GCS API: storage_client.create_bucket(bucket_name, location=location)
+                return f'storage_client = storage.Client()\nbucket = storage_client.create_bucket({bucket_name_str}, location=\'{location}\')\nprint(f"Bucket \'{{bucket.name}}\' created successfully in location \'{location}\'.")'
+            else:
+                # Default location is 'US' for GCS
+                return f'storage_client = storage.Client()\nbucket = storage_client.create_bucket({bucket_name_str})\nprint(f"Bucket \'{{bucket.name}}\' created successfully.")'
+        
+        # Match create_bucket with Bucket parameter (second pass - after variable renaming)
         code = re.sub(
-            r'(\w+)\.create_bucket\(Bucket=([^,]+)(?:,\s*CreateBucketConfiguration=[^\)]+)?\)',
-            replace_create_bucket,
-            code
+            r'(\w+)\.create_bucket\(\s*Bucket\s*=\s*([^,]+)(?:,\s*CreateBucketConfiguration\s*=\s*\{[^}]+\})?\s*\)',
+            replace_create_bucket_late,
+            code,
+            flags=re.DOTALL
         )
         code = re.sub(
-            r'(\w+)\.create_bucket\(Bucket=([^,\)]+)\)',
-            replace_create_bucket,
+            r'(\w+)\.create_bucket\(\s*([^,\)]+)\s*\)',
+            replace_create_bucket_late,
             code
         )
         
         # Replace S3 delete_bucket -> GCS delete_bucket with improved structure
         def replace_delete_bucket(match):
-            return f'# ---\n\n### 🗑️ Delete bucket from GCS\nbucket = gcs_client.bucket(bucket_name)\nbucket.delete()\nprint(f"Bucket gs://{{bucket_name}} deleted")'
+            bucket_name_var = match.group(2).strip('\'"') if len(match.groups()) >= 2 else 'bucket_name'
+            # Correct GCS API pattern: storage_client.get_bucket(bucket_name).delete()
+            return f'storage_client = storage.Client()\nstorage_client.get_bucket("{bucket_name_var}").delete()\nprint(f"Bucket \'{bucket_name_var}\' deleted successfully.")'
         code = re.sub(
             r'(\w+)\.delete_bucket\(Bucket=([^,\)]+)\)',
             replace_delete_bucket,
@@ -1069,6 +1594,7 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Remove or comment AWS region names
         # Replace AWS region constants/variables
+        # BUT: Don't modify function parameter defaults - only modify variable assignments
         aws_regions = [
             'us-east-1', 'us-east-2', 'us-west-1', 'us-west-2',
             'eu-west-1', 'eu-west-2', 'eu-west-3', 'eu-central-1',
@@ -1076,11 +1602,13 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             'ap-south-1', 'sa-east-1', 'ca-central-1'
         ]
         for region in aws_regions:
-            # Comment out region assignments
+            # Comment out region assignments (but NOT function parameter defaults)
+            # Only match variable assignments, not function parameters
             code = re.sub(
-                rf'(\w+)\s*=\s*[\'"]{region}[\'"]',
-                rf'# \1 = \'{region}\'  # Region not needed for GCP (uses GCP_REGION env var)',
-                code
+                rf'^(\s+)(\w+)\s*=\s*[\'"]{region}[\'"]',
+                rf'\1# \2 = \'{region}\'  # Region not needed for GCP (uses GCP_REGION env var)',
+                code,
+                flags=re.MULTILINE
             )
             # Replace region_name parameter in client calls (already handled above, but ensure it's removed)
             code = re.sub(
@@ -1213,10 +1741,134 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Clean up spaces before closing paren
         code = re.sub(r'\s+\)', ')', code)
         
+        # Final pass: If gcs_client exists but storage_client is referenced, replace storage_client with gcs_client
+        # This ensures consistency when gcs_client was created by boto3.client replacement
+        if 'gcs_client = storage.Client()' in code:
+            # Replace storage_client method calls with gcs_client
+            code = code.replace('storage_client.create_bucket', 'gcs_client.create_bucket')
+            code = code.replace('storage_client.bucket', 'gcs_client.bucket')
+            code = code.replace('storage_client.list_blobs', 'gcs_client.list_blobs')
+            code = code.replace('storage_client.get_bucket', 'gcs_client.get_bucket')
+            code = code.replace('storage_client.list_buckets', 'gcs_client.list_buckets')
+        
         # Add exception handling
         code = self._add_exception_handling(code)
         
+        # Use Gemini to validate and fix any remaining AWS patterns
+        code = self._validate_and_fix_with_gemini(code, original_code)
+        
         return code, variable_mapping
+    
+    def _validate_and_fix_with_gemini(self, refactored_code: str, original_code: str) -> str:
+        """Use Gemini API to validate refactored code and fix any remaining AWS patterns.
+        
+        This ensures the refactored code is correct for Google Cloud Platform and
+        doesn't mix AWS and GCP APIs.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            import google.generativeai as genai
+            from config import Config
+            
+            if not Config.GEMINI_API_KEY:
+                logger.warning("GEMINI_API_KEY not set, skipping Gemini validation")
+                return refactored_code
+            
+            genai.configure(api_key=Config.GEMINI_API_KEY)
+            model = genai.GenerativeModel('gemini-1.5-pro')
+            
+            # Check if code still has AWS patterns - be comprehensive
+            aws_patterns = [
+                'boto3', 'botocore', 's3.buckets', 's3.meta.client', 
+                's3.Bucket', 's3.create_bucket', 's3.upload_file',
+                's3.download_file', 's3.list_objects', 'ResponseMetadata',
+                'LocationConstraint', 'ACL', 'CreateBucketConfiguration',
+                'self.s3', 's3_client', 's3_bucket', 's3_key', 's3_object',
+                'Bucket=', 'Key=', 'QueueUrl=', 'TopicArn=', 'TableName=',
+                'FunctionName=', 'InvocationType=', 'Payload=', 'Region=',
+                'aws_access_key', 'aws_secret', 'AWS_ACCESS_KEY', 'AWS_SECRET',
+                'amazonaws.com', '.s3.', 's3://', 'S3Manager', 'S3Client'
+            ]
+            
+            # Check for patterns (case-insensitive for some)
+            has_aws_patterns = False
+            refactored_lower = refactored_code.lower()
+            for pattern in aws_patterns:
+                if pattern.lower() in refactored_lower or pattern in refactored_code:
+                    has_aws_patterns = True
+                    break
+            
+            # Also check for common AWS method patterns
+            aws_method_patterns = [
+                r'\bs3\s*\.\s*\w+',  # s3.something
+                r'\w+\s*\.\s*create_bucket\s*\(',
+                r'\w+\s*\.\s*upload_file\s*\(',
+                r'\w+\s*\.\s*download_file\s*\(',
+                r'\w+\s*\.\s*list_objects',
+                r'\w+\s*\.\s*delete_object\s*\(',
+                r'\w+\s*\.\s*put_object\s*\(',
+                r'\w+\s*\.\s*get_object\s*\(',
+            ]
+            
+            if not has_aws_patterns:
+                for pattern in aws_method_patterns:
+                    if re.search(pattern, refactored_code, re.IGNORECASE):
+                        has_aws_patterns = True
+                        break
+            
+            if not has_aws_patterns:
+                # No AWS patterns found, return as-is
+                return refactored_code
+            
+            # Use Gemini to fix the code
+            prompt = f"""You are a code refactoring expert. The following Python code was supposed to be refactored from AWS S3 to Google Cloud Storage, but it still contains AWS patterns mixed with GCP code.
+
+**CRITICAL REQUIREMENTS:**
+1. Remove ALL AWS/boto3 code and replace with correct Google Cloud Storage code
+2. The code should ONLY use `google.cloud.storage` library
+3. Remove any `boto3.resource('s3')` or `boto3.client('s3')` initialization
+4. Replace AWS S3 methods with correct GCS equivalents:
+   - `s3.buckets.all()` → `storage_client.list_buckets()`
+   - `s3.create_bucket()` → `storage_client.create_bucket(bucket_name, location=location)`
+   - `s3.upload_file()` → `bucket.blob(blob_name).upload_from_filename(file_path)`
+   - `s3.download_file()` → `bucket.blob(blob_name).download_to_filename(file_path)`
+   - `s3.list_objects_v2()` → `bucket.list_blobs()`
+   - `s3.delete_object()` → `bucket.blob(blob_name).delete()`
+   - `s3.delete_bucket()` → `storage_client.get_bucket(bucket_name).delete()`
+5. Remove AWS-specific response structures like `ResponseMetadata`, `LocationConstraint`, `ACL`, `CreateBucketConfiguration`
+6. Use correct GCS API patterns - get bucket object first, then blob object, then call methods
+7. Ensure class names are GCP-friendly (e.g., `GCSManager` not `S3Manager`)
+8. Return ONLY the corrected Python code, no explanations
+
+**Original AWS Code (for reference):**
+```python
+{original_code[:2000]}  # First 2000 chars for context
+```
+
+**Incorrectly Refactored Code (needs fixing):**
+```python
+{refactored_code}
+```
+
+**Corrected Google Cloud Storage Code:**"""
+            
+            response = model.generate_content(prompt)
+            corrected_code = response.text.strip()
+            
+            # Extract code from markdown code blocks if present
+            if '```python' in corrected_code:
+                corrected_code = corrected_code.split('```python')[1].split('```')[0].strip()
+            elif '```' in corrected_code:
+                corrected_code = corrected_code.split('```')[1].split('```')[0].strip()
+            
+            logger.info("Gemini validation completed, code corrected")
+            return corrected_code
+            
+        except Exception as e:
+            logger.warning(f"Gemini validation failed: {e}, returning original refactored code")
+            return refactored_code
     
     def _add_exception_handling(self, code: str) -> str:
         """Add exception handling transformations for all AWS services"""
@@ -2333,7 +2985,14 @@ class ExtendedSemanticRefactoringService:
         )
         
         # Apply transformations using AST engine
-        transformed_code = self.ast_engine.transform_code(source_code, language, recipe)
+        # transform_code returns (transformed_code, variable_mapping) tuple
+        result = self.ast_engine.transform_code(source_code, language, recipe)
+        
+        # Handle both tuple and string returns
+        if isinstance(result, tuple):
+            transformed_code, variable_mapping = result
+        else:
+            transformed_code = result
         
         return transformed_code
     

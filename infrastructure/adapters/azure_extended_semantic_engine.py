@@ -1204,7 +1204,14 @@ class AzureExtendedSemanticRefactoringService:
         recipe = self.generate_transformation_recipe(source_code, target_api, language, service_type)
         
         # Apply transformations using AST engine
-        transformed_code = self.ast_engine.transform_code(source_code, language, recipe)
+        # transform_code returns (transformed_code, variable_mapping) tuple
+        result = self.ast_engine.transform_code(source_code, language, recipe)
+        
+        # Handle both tuple and string returns
+        if isinstance(result, tuple):
+            transformed_code, variable_mapping = result
+        else:
+            transformed_code = result
         
         return transformed_code
     

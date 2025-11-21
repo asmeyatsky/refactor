@@ -139,11 +139,12 @@ def get_migration_status(migration_id: str):
     if job["status"] == "completed" and job["result"]:
         result = job["result"]
         if isinstance(result, dict):
-            # Try to extract refactored code from result
+            # Try to extract refactored code from result - prioritize top level
             if "refactored_code" in result:
                 response["refactored_code"] = result["refactored_code"]
-            elif "execution_result" in result and "refactored_code" in result["execution_result"]:
-                response["refactored_code"] = result["execution_result"]["refactored_code"]
+            elif "execution_result" in result and isinstance(result["execution_result"], dict):
+                if "refactored_code" in result["execution_result"]:
+                    response["refactored_code"] = result["execution_result"]["refactored_code"]
             elif "transformed_files" in result:
                 # If we have transformed files info, try to read the refactored code
                 try:
@@ -157,14 +158,21 @@ def get_migration_status(migration_id: str):
                         if code_file.exists():
                             with open(code_file, 'r', encoding='utf-8') as f:
                                 response["refactored_code"] = f.read()
-                except Exception:
-                    pass  # If we can't read it, that's okay
+                except Exception as e:
+                    print(f"Warning: Could not read refactored code from file: {e}")
             
-            # Extract variable mapping if available
+            # Extract variable mapping if available - prioritize top level
             if "variable_mapping" in result:
                 response["variable_mapping"] = result["variable_mapping"]
-            elif "execution_result" in result and "variable_mapping" in result["execution_result"]:
-                response["variable_mapping"] = result["execution_result"]["variable_mapping"]
+            elif "execution_result" in result and isinstance(result["execution_result"], dict):
+                if "variable_mapping" in result["execution_result"]:
+                    response["variable_mapping"] = result["execution_result"]["variable_mapping"]
+            
+            # Also include success flag if available
+            if "success" in result:
+                response["success"] = result["success"]
+            else:
+                response["success"] = True  # If completed, assume success unless error present
     
     return response
 
@@ -275,6 +283,10 @@ class MigrateRepositoryRequest(BaseModel):
 @app.post("/api/repository/analyze")
 async def analyze_repository_endpoint(request: AnalyzeRepositoryRequest):
     """Analyze a Git repository and generate MAR"""
+    import traceback
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
         credentials = None
         if request.token:
@@ -298,10 +310,49 @@ async def analyze_repository_endpoint(request: AnalyzeRepositoryRequest):
         )
         
         if result['success']:
+            # Safely serialize MAR
+            mar_dict = None
+            if result['mar']:
+                try:
+                    if hasattr(result['mar'], 'to_dict'):
+                        mar_dict = result['mar'].to_dict()
+                    else:
+                        # Fallback: convert to dict manually
+                        mar_dict = {
+                            'repository_id': result['mar'].repository_id,
+                            'repository_url': result['mar'].repository_url,
+                            'branch': result['mar'].branch,
+                            'generated_at': result['mar'].generated_at.isoformat() if result['mar'].generated_at else None,
+                            'total_files': result['mar'].total_files,
+                            'total_lines': result['mar'].total_lines,
+                            'languages_detected': result['mar'].languages_detected,
+                            'services_detected': [
+                                {
+                                    'service_name': s.service_name,
+                                    'service_type': s.service_type,
+                                    'files_affected': s.files_affected,
+                                    'estimated_changes': s.estimated_changes,
+                                    'complexity': s.complexity.value if hasattr(s.complexity, 'value') else str(s.complexity),
+                                    'confidence': s.confidence,
+                                    'patterns_found': s.patterns_found
+                                } for s in result['mar'].services_detected
+                            ] if hasattr(result['mar'], 'services_detected') else [],
+                            'total_estimated_changes': result['mar'].total_estimated_changes,
+                            'files_to_modify': result['mar'].files_to_modify,
+                            'files_to_modify_count': result['mar'].files_to_modify_count,
+                            'confidence_score': result['mar'].confidence_score,
+                            'overall_risk': result['mar'].overall_risk.value if hasattr(result['mar'].overall_risk, 'value') else str(result['mar'].overall_risk),
+                            'risks': result['mar'].risks,
+                            'estimated_duration_minutes': result['mar'].estimated_duration_minutes
+                        }
+                except Exception as e:
+                    logger.warning(f"Error serializing MAR: {e}")
+                    mar_dict = None
+            
             return {
                 "success": True,
                 "repository_id": result['repository_id'],
-                "mar": result['mar'].to_dict() if result['mar'] else None,
+                "mar": mar_dict,
                 "repository": {
                     "id": result['repository'].id,
                     "url": result['repository'].url,
@@ -312,10 +363,51 @@ async def analyze_repository_endpoint(request: AnalyzeRepositoryRequest):
                 }
             }
         else:
-            raise HTTPException(status_code=400, detail=result.get('error', 'Analysis failed'))
+            error_msg = result.get('error', 'Analysis failed')
+            # Determine appropriate status code based on error type
+            status_code = 400
+            if 'Authentication failed' in error_msg or 'Authentication' in error_msg:
+                status_code = 401
+            elif 'not found' in error_msg.lower() or 'Repository not found' in error_msg:
+                status_code = 404
+            elif 'Timeout' in error_msg or 'timeout' in error_msg.lower():
+                status_code = 408
+            elif 'Network error' in error_msg or 'connection' in error_msg.lower():
+                status_code = 503
             
+            raise HTTPException(status_code=status_code, detail=error_msg)
+            
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        error_msg = str(e)
+        error_traceback = traceback.format_exc()
+        
+        # Log the full error for debugging
+        logger.error(f"Error analyzing repository: {error_msg}")
+        logger.error(f"Traceback: {error_traceback}")
+        print(f"ERROR analyzing repository: {error_msg}")
+        print(f"Traceback: {error_traceback}")
+        
+        # Determine appropriate status code based on error type
+        status_code = 500
+        if 'Authentication' in error_msg or '401' in error_msg:
+            status_code = 401
+        elif 'not found' in error_msg.lower() or '404' in error_msg:
+            status_code = 404
+        elif 'Timeout' in error_msg or 'timeout' in error_msg.lower():
+            status_code = 408
+        
+        # Include traceback in development mode for debugging
+        detail_msg = error_msg
+        if os.getenv('DEBUG', 'false').lower() == 'true':
+            detail_msg = f"{error_msg}\n\nTraceback:\n{error_traceback}"
+        
+        raise HTTPException(status_code=status_code, detail=detail_msg)
 
 
 @app.post("/api/repository/{repository_id}/migrate")
@@ -368,7 +460,21 @@ async def migrate_repository_endpoint(repository_id: str, request: MigrateReposi
             except Exception as e:
                 print(f"PR creation failed: {e}")
         
-        return {
+        import traceback
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Log migration results for debugging
+        logger.info(f"Migration result: success={result.get('success')}, "
+                   f"files_changed={result.get('total_files_changed', 0)}, "
+                   f"files_failed={result.get('total_files_failed', 0)}")
+        
+        if result.get('files_failed'):
+            for failure in result.get('files_failed', []):
+                logger.error(f"Failed file: {failure.get('file', 'unknown')}, "
+                           f"error: {failure.get('error', 'unknown error')}")
+        
+        response_data = {
             "success": result['success'],
             "repository_id": repository_id,
             "files_changed": result.get('files_changed', []),
@@ -377,9 +483,63 @@ async def migrate_repository_endpoint(repository_id: str, request: MigrateReposi
             "total_files_failed": result.get('total_files_failed', 0),
             "test_results": result.get('test_results'),
             "pr_url": pr_url,
-            "error": result.get('error')
+            "error": result.get('error'),
+            "refactored_files": result.get('refactored_files', {})  # Include refactored file contents
         }
         
+        # Debug logging
+        logger.info(f"API Response - refactored_files keys: {list(response_data.get('refactored_files', {}).keys())}")
+        for file_name, content in response_data.get('refactored_files', {}).items():
+            if content:
+                logger.info(f"API Response - {file_name}: {len(content)} characters")
+            else:
+                logger.warning(f"API Response - {file_name}: None/Empty")
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        error_msg = str(e)
+        error_traceback = traceback.format_exc()
+        
+        logger.error(f"Error executing repository migration: {error_msg}")
+        logger.error(f"Traceback: {error_traceback}")
+        print(f"ERROR executing repository migration: {error_msg}")
+        print(f"Traceback: {error_traceback}")
+        
+        raise HTTPException(status_code=500, detail=error_msg)
+
+
+@app.get("/api/repository/{repository_id}/files/{file_path:path}")
+async def get_refactored_file(repository_id: str, file_path: str):
+    """Get refactored file content"""
+    try:
+        from infrastructure.repositories.repository_repository import RepositoryRepositoryAdapter
+        import os
+        
+        repo_repo = RepositoryRepositoryAdapter()
+        repository = repo_repo.load(repository_id)
+        
+        if not repository or not repository.local_path:
+            raise HTTPException(status_code=404, detail="Repository not found")
+        
+        full_path = os.path.join(repository.local_path, file_path)
+        if not os.path.exists(full_path):
+            raise HTTPException(status_code=404, detail=f"File not found: {file_path}")
+        
+        with open(full_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        return {
+            "file_path": file_path,
+            "content": content,
+            "size": len(content)
+        }
     except HTTPException:
         raise
     except Exception as e:

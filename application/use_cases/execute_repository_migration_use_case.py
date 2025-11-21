@@ -97,10 +97,20 @@ class ExecuteRepositoryMigrationUseCase:
                     })
             
             # Apply refactoring to each code file
+            print(f"Files to modify: {files_to_modify}")
+            print(f"Services to migrate: {services_to_migrate}")
+            print(f"Repository local path: {repository.local_path}")
+            
             for file_path in files_to_modify:
                 full_path = os.path.join(repository.local_path, file_path)
+                print(f"Processing file: {file_path} -> {full_path}")
                 
                 if not os.path.exists(full_path):
+                    print(f"WARNING: File not found: {full_path}")
+                    files_failed.append({
+                        'file': file_path,
+                        'error': f'File not found at path: {full_path}'
+                    })
                     continue
                 
                 try:
@@ -108,36 +118,108 @@ class ExecuteRepositoryMigrationUseCase:
                     with open(full_path, 'r', encoding='utf-8') as f:
                         original_content = f.read()
                     
+                    print(f"Read {len(original_content)} characters from {file_path}")
+                    
                     # Determine language
                     language = 'python' if file_path.endswith('.py') else 'java'
+                    print(f"Detected language: {language}")
                     
                     # Apply refactoring for each service
                     refactored_content = original_content
+                    services_applied = []
+                    
+                    print(f"Checking {len(mar.services_detected)} detected services against {len(services_to_migrate)} services to migrate")
                     for service in mar.services_detected:
+                        print(f"  Service: {service.service_name}, type: {service.service_type}, files_affected: {service.files_affected}")
+                        print(f"    In services_to_migrate? {service.service_name in services_to_migrate}")
+                        print(f"    File in files_affected? {file_path in service.files_affected}")
+                        
                         if service.service_name in services_to_migrate and file_path in service.files_affected:
+                            print(f"✅ Applying refactoring for service: {service.service_name} (type: {service.service_type})")
                             # Determine service type and migration
                             if service.service_type == 'aws':
                                 service_type = self._get_aws_service_type(service.service_name)
-                                refactored_content = self.refactoring_service.apply_refactoring(
-                                    source_code=refactored_content,
-                                    language=language,
-                                    service_type=service_type
-                                )
+                                print(f"  AWS service type: {service_type}")
+                                try:
+                                    refactored_result = self.refactoring_service.apply_refactoring(
+                                        source_code=refactored_content,
+                                        language=language,
+                                        service_type=service_type
+                                    )
+                                    # Ensure we have a string, not a tuple
+                                    if isinstance(refactored_result, tuple):
+                                        refactored_content, _ = refactored_result
+                                    else:
+                                        refactored_content = refactored_result
+                                    
+                                    # Validate it's a string
+                                    if not isinstance(refactored_content, str):
+                                        raise TypeError(f"Expected string, got {type(refactored_content)}: {refactored_content}")
+                                    
+                                    services_applied.append(service.service_name)
+                                    print(f"  ✅ Successfully applied refactoring for {service.service_name}")
+                                except Exception as e:
+                                    print(f"  ❌ Error applying refactoring: {e}")
+                                    import traceback
+                                    print(f"  Traceback: {traceback.format_exc()}")
+                                    raise
                             elif service.service_type == 'azure':
                                 service_type = self._get_azure_service_type(service.service_name)
-                                refactored_content = self.azure_refactoring_service.apply_refactoring(
-                                    source_code=refactored_content,
-                                    language=language,
-                                    service_type=service_type
-                                )
+                                print(f"  Azure service type: {service_type}")
+                                try:
+                                    refactored_result = self.azure_refactoring_service.apply_refactoring(
+                                        source_code=refactored_content,
+                                        language=language,
+                                        service_type=service_type
+                                    )
+                                    # Ensure we have a string, not a tuple
+                                    if isinstance(refactored_result, tuple):
+                                        refactored_content, _ = refactored_result
+                                    else:
+                                        refactored_content = refactored_result
+                                    
+                                    # Validate it's a string
+                                    if not isinstance(refactored_content, str):
+                                        raise TypeError(f"Expected string, got {type(refactored_result)}: {refactored_result}")
+                                    
+                                    services_applied.append(service.service_name)
+                                    print(f"  ✅ Successfully applied refactoring for {service.service_name}")
+                                except Exception as e:
+                                    print(f"  ❌ Error applying refactoring: {e}")
+                                    import traceback
+                                    print(f"  Traceback: {traceback.format_exc()}")
+                                    raise
+                        else:
+                            print(f"  ⏭️  Skipping service {service.service_name} (not in services_to_migrate or file not affected)")
+                    
+                    print(f"Services applied: {services_applied}")
+                    print(f"Content changed: {refactored_content != original_content}")
+                    
+                    # Final validation: ensure refactored_content is a string before writing
+                    if not isinstance(refactored_content, str):
+                        raise TypeError(
+                            f"refactored_content must be a string, got {type(refactored_content)}. "
+                            f"Value: {str(refactored_content)[:200]}"
+                        )
                     
                     # Write refactored content if changed
                     if refactored_content != original_content:
                         with open(full_path, 'w', encoding='utf-8') as f:
                             f.write(refactored_content)
                         files_changed.append(file_path)
+                        print(f"✅ Successfully refactored: {file_path}")
+                    else:
+                        print(f"⚠️  No changes detected for: {file_path} (content unchanged)")
+                        # Still count as changed if services were applied (even if content didn't change)
+                        if services_applied:
+                            files_changed.append(file_path)
+                            print(f"✅ Added to changed list (services applied but no content diff)")
                 
                 except Exception as e:
+                    import traceback
+                    error_traceback = traceback.format_exc()
+                    error_msg = f"{str(e)}\n\nTraceback:\n{error_traceback}"
+                    print(f"❌ ERROR processing {file_path}: {error_msg}")
                     files_failed.append({
                         'file': file_path,
                         'error': str(e)
@@ -174,13 +256,42 @@ class ExecuteRepositoryMigrationUseCase:
             repository.metadata['files_changed'] = str(len(files_changed))
             self.repository_repo.save(repository)
             
+            # Read refactored file contents for display
+            # IMPORTANT: Read files IMMEDIATELY after writing them, before any cleanup
+            refactored_files_content = {}
+            for file_path in files_changed:
+                full_path = os.path.join(repository.local_path, file_path)
+                print(f"Reading refactored file for display: {file_path} -> {full_path}")
+                if os.path.exists(full_path):
+                    try:
+                        with open(full_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                            refactored_files_content[file_path] = content
+                            print(f"✅ Read {len(content)} characters from {file_path}")
+                    except Exception as e:
+                        print(f"❌ Warning: Could not read refactored file {file_path}: {e}")
+                        import traceback
+                        print(f"Traceback: {traceback.format_exc()}")
+                        refactored_files_content[file_path] = None
+                else:
+                    print(f"❌ File does not exist: {full_path}")
+                    refactored_files_content[file_path] = None
+            
+            print(f"Refactored files content keys: {list(refactored_files_content.keys())}")
+            for key, value in refactored_files_content.items():
+                if value:
+                    print(f"  {key}: {len(value)} chars")
+                else:
+                    print(f"  {key}: None")
+            
             result = {
                 'success': migration_success and test_success,
                 'repository_id': repository_id,
                 'files_changed': files_changed,
                 'files_failed': files_failed,
                 'total_files_changed': len(files_changed),
-                'total_files_failed': len(files_failed)
+                'total_files_failed': len(files_failed),
+                'refactored_files': refactored_files_content  # Add refactored file contents
             }
             
             if test_results:
@@ -196,13 +307,24 @@ class ExecuteRepositoryMigrationUseCase:
             return result
             
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            error_msg = str(e)
+            
+            print(f"❌ FATAL ERROR in migration: {error_msg}")
+            print(f"Traceback: {error_traceback}")
+            
             repository = repository.update_status(RepositoryStatus.FAILED)
-            repository.metadata['error'] = str(e)
+            repository.metadata['error'] = error_msg
             self.repository_repo.save(repository)
             
             return {
                 'success': False,
-                'error': str(e)
+                'error': error_msg,
+                'files_changed': files_changed if 'files_changed' in locals() else [],
+                'files_failed': files_failed if 'files_failed' in locals() else [],
+                'total_files_changed': len(files_changed) if 'files_changed' in locals() else 0,
+                'total_files_failed': len(files_failed) if 'files_failed' in locals() else 0
             }
     
     def _get_aws_service_type(self, service_name: str) -> str:

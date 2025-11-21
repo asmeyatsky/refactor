@@ -1,0 +1,6 @@
+{
+  "code": "import boto3\n\ndef create_s3_bucket(bucket_name, region='us-east-1'):\n    try:\n        s3 = boto3.client('s3', region_name=region)\n        s3.create_bucket(Bucket=bucket_name, CreateBucketConfiguration={'LocationConstraint': region})\n        return True\n    except Exception as e:\n        return False",
+  "language": "python",
+  "services": ["s3"],
+  "cloud_provider": "aws"
+}

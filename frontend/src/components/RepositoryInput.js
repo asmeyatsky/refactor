@@ -14,9 +14,9 @@ import {
   ListItemText,
   ListItemIcon,
   Grid,
-  Fade
+  Fade,
+  Autocomplete
 } from '@mui/material';
-import { Autocomplete } from '@mui/material';
 import {
   Search as SearchIcon,
   CheckCircle as CheckIcon,
@@ -25,7 +25,6 @@ import {
   Code as CodeIcon,
   Assessment as AssessmentIcon
 } from '@mui/icons-material';
-import { Autocomplete } from '@mui/material';
 
 const RepositoryInput = ({
   repositoryUrl,
@@ -116,7 +115,7 @@ const RepositoryInput = ({
 
       {analysisResult && analysisResult.mar && (
         <Fade in={!!analysisResult}>
-          <Paper elevation={2} sx={{ p: 3, bgcolor: 'success.light', bgcolor: 'rgba(76, 175, 80, 0.1)' }}>
+          <Paper elevation={2} sx={{ p: 3, bgcolor: 'rgba(76, 175, 80, 0.1)' }}>
             <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
               <CheckIcon color="success" sx={{ mr: 1 }} />
               <Typography variant="h6" sx={{ fontWeight: 600 }}>

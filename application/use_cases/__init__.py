@@ -268,7 +268,11 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
 
                 # Execute the refactoring task based on service type
                 if task.operation != "no_op":  # Skip no-op tasks
-                    transformed_content = self._execute_service_refactoring(codebase, task, service_type)
+                    transformed_content, variable_mapping = self._execute_service_refactoring(codebase, task, service_type)
+                    
+                    # Collect variable mapping for summary
+                    if variable_mapping and isinstance(variable_mapping, dict):
+                        all_variable_mappings.update(variable_mapping)
 
                     # Write the transformed content back to the file
                     self.file_repo.write_file(task.file_path, transformed_content)
@@ -379,99 +383,120 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
         else:
             return 'unknown'
 
-    def _execute_service_refactoring(self, codebase: Codebase, task: RefactoringTask, service_type: str) -> str:
-        """Execute refactoring for a specific service type"""
+    def _execute_service_refactoring(self, codebase: Codebase, task: RefactoringTask, service_type: str) -> tuple[str, dict]:
+        """Execute refactoring for a specific service type
+        
+        Returns:
+            tuple: (transformed_content, variable_mapping)
+        """
         from infrastructure.adapters.extended_semantic_engine import ExtendedSemanticRefactoringService, ExtendedASTTransformationEngine
         from infrastructure.adapters.azure_extended_semantic_engine import AzureExtendedSemanticRefactoringService, AzureExtendedASTTransformationEngine
         
-        with open(task.file_path, 'r', encoding='utf-8') as f:
-            original_content = f.read()
-
-        # Use the extended semantic engine to transform the code
+        # Extract ALL needed values from task BEFORE any operations
+        # This ensures task is not captured in any closure
+        file_path_str = str(task.file_path)
+        lang_value = codebase.language.value
+        llm_provider_ref = self.llm_provider
+        
+        # Read file content
+        with open(file_path_str, 'r', encoding='utf-8') as f:
+            original_content_str = f.read()
+        
+        # Now task is no longer needed - ensure it's out of scope
+        # by calling a standalone function that doesn't have task in scope
         try:
-            # Determine which engine to use based on service type
-            if service_type.startswith('azure_') or 'blob_storage' in service_type or 'cosmos_db' in service_type:
-                # Use Azure extended engine
-                ast_engine = AzureExtendedASTTransformationEngine()
-                semantic_engine = AzureExtendedSemanticRefactoringService(ast_engine)
-            else:
-                # Use AWS extended engine
-                ast_engine = ExtendedASTTransformationEngine()
-                semantic_engine = ExtendedSemanticRefactoringService(ast_engine)
-            
-            # Use LLM to generate transformation recipe if available
-            if self.llm_provider:
-                try:
-                    # Generate refactoring intent using LLM
-                    intent = self.llm_provider.generate_refactoring_intent(
-                        codebase=codebase,
-                        file_path=task.file_path,
-                        target="gcp"
-                    )
-                    
-                    # Create analysis dict for LLM recipe generation
-                    analysis = {
-                        'file_path': task.file_path,
-                        'code': original_content[:2000],  # Limit code size for LLM
-                        'intent': intent,
-                        'target': 'gcp',
-                        'service_type': service_type,
-                        'language': codebase.language.value
-                    }
-                    
-                    # Generate recipe using LLM
-                    llm_recipe_text = self.llm_provider.generate_recipe(analysis)
-                    
-                    # Parse LLM recipe and create structured recipe dict
-                    # The LLM recipe guides which transformations to apply
-                    recipe = {
-                        'operation': 'service_migration',
-                        'service_type': service_type,
-                        'language': codebase.language.value,
-                        'llm_recipe': llm_recipe_text,  # Include LLM guidance
-                        'llm_guided': True  # Flag to indicate LLM was used
-                    }
-                except Exception as llm_error:
-                    # If LLM fails, fall back to rule-based approach
-                    import logging
-                    logging.warning(f"LLM recipe generation failed: {llm_error}, using rule-based transformation")
-                    recipe = {
-                        'operation': 'service_migration',
-                        'service_type': service_type,
-                        'language': codebase.language.value,
-                        'llm_guided': False
-                    }
-            else:
-                # No LLM provider available, use rule-based approach
-                recipe = {
-                    'operation': 'service_migration',
-                    'service_type': service_type,
-                    'language': codebase.language.value,
-                    'llm_guided': False
-                }
-            
-            # Transform the code (AST engine will use regex patterns, guided by LLM recipe if available)
-            transformed_content, variable_mapping = ast_engine.transform_code(
-                original_content,
-                codebase.language.value,
-                recipe
+            # Call standalone transformation function
+            transformed_content, variable_mapping = _transform_code_standalone(
+                content=original_content_str,
+                language=lang_value,
+                service_type=service_type,
+                llm_provider=llm_provider_ref,
+                codebase_obj=codebase,
+                file_path=file_path_str
             )
-            
-            # Store variable mapping in task metadata and collect for summary
-            if variable_mapping:
-                if not hasattr(task, 'metadata'):
-                    task.metadata = {}
-                task.metadata['variable_mapping'] = variable_mapping
-                # Merge into overall mapping (later mappings override earlier ones for same variable)
-                all_variable_mappings.update(variable_mapping)
-            
-            return transformed_content
-            
+            return transformed_content, variable_mapping
         except Exception as e:
             # If transformation fails, return original with error comment
             import traceback
             error_msg = f"# ERROR during transformation: {str(e)}\n# Original code preserved below\n{traceback.format_exc()}\n\n"
-            return error_msg + original_content
+            return error_msg + original_content_str, {}
+
+
+# Standalone function outside the class to ensure no closure capture of frozen dataclasses
+def _transform_code_standalone(
+    content: str,
+    language: str,
+    service_type: str,
+    llm_provider,
+    codebase_obj,
+    file_path: str
+) -> tuple[str, dict]:
+    """Standalone transformation function that doesn't capture any frozen dataclasses"""
+    from infrastructure.adapters.extended_semantic_engine import ExtendedSemanticRefactoringService, ExtendedASTTransformationEngine
+    from infrastructure.adapters.azure_extended_semantic_engine import AzureExtendedSemanticRefactoringService, AzureExtendedASTTransformationEngine
+    
+    # Determine which engine to use based on service type
+    if service_type.startswith('azure_') or 'blob_storage' in service_type or 'cosmos_db' in service_type:
+        # Use Azure extended engine
+        ast_engine = AzureExtendedASTTransformationEngine()
+        semantic_engine = AzureExtendedSemanticRefactoringService(ast_engine)
+    else:
+        # Use AWS extended engine
+        ast_engine = ExtendedASTTransformationEngine()
+        semantic_engine = ExtendedSemanticRefactoringService(ast_engine)
+    
+    # Use LLM to generate transformation recipe if available
+    if llm_provider:
+        try:
+            # Generate refactoring intent using LLM
+            intent = llm_provider.generate_refactoring_intent(
+                codebase=codebase_obj,
+                file_path=file_path,
+                target="gcp"
+            )
+            
+            # Create analysis dict for LLM recipe generation
+            analysis = {
+                'file_path': file_path,
+                'code': content[:2000],  # Limit code size for LLM
+                'intent': intent,
+                'target': 'gcp',
+                'service_type': service_type,
+                'language': language
+            }
+            
+            # Generate recipe using LLM
+            llm_recipe_text = llm_provider.generate_recipe(analysis)
+            
+            # Parse LLM recipe and create structured recipe dict
+            recipe = {
+                'operation': 'service_migration',
+                'service_type': service_type,
+                'language': language,
+                'llm_recipe': llm_recipe_text,
+                'llm_guided': True
+            }
+        except Exception as llm_error:
+            # If LLM fails, fall back to rule-based approach
+            import logging
+            logging.warning(f"LLM recipe generation failed: {llm_error}, using rule-based transformation")
+            recipe = {
+                'operation': 'service_migration',
+                'service_type': service_type,
+                'language': language,
+                'llm_guided': False
+            }
+    else:
+        # No LLM provider available, use rule-based approach
+        recipe = {
+            'operation': 'service_migration',
+            'service_type': service_type,
+            'language': language,
+            'llm_guided': False
+        }
+    
+    # Transform the code (AST engine will use regex patterns, guided by LLM recipe if available)
+    return ast_engine.transform_code(content, language, recipe)
 
 
 class CreateRefactoringPlanUseCase:

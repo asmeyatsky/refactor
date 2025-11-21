@@ -65,7 +65,19 @@ class AnalyzeRepositoryUseCase:
             if credentials:
                 self.git_adapter.credentials = credentials
             
+            # Auto-detect branch if not provided or empty
+            # Handle both None and empty string cases
+            if branch is None or (isinstance(branch, str) and branch.strip() == ""):
+                try:
+                    branch = self.git_adapter.get_default_branch(repository_url)
+                    print(f"Auto-detected default branch: {branch}")
+                except Exception as e:
+                    print(f"Warning: Could not detect default branch, using 'main': {e}")
+                    branch = "main"
+            
+            print(f"Cloning repository {repository_url} with branch {branch}")
             local_path = self.git_adapter.clone_repository(repository_url, branch)
+            print(f"Successfully cloned to: {local_path}")
             
             # Update repository with local path
             repository = Repository(
@@ -120,15 +132,40 @@ class AnalyzeRepositoryUseCase:
             }
             
         except Exception as e:
+            import traceback
+            error_traceback = traceback.format_exc()
+            error_msg = str(e)
+            
+            # Log the error for debugging
+            print(f"ERROR in AnalyzeRepositoryUseCase: {error_msg}")
+            print(f"Traceback: {error_traceback}")
+            
             # Update repository status to failed
-            repository = repository.update_status(RepositoryStatus.FAILED)
-            repository.metadata['error'] = str(e)
-            self.repository_repo.save(repository)
+            try:
+                # Create a new repository object with failed status
+                repository = Repository(
+                    id=repository.id,
+                    url=repository.url,
+                    branch=repository.branch,
+                    provider=repository.provider,
+                    local_path=repository.local_path,
+                    languages=repository.languages,
+                    total_files=repository.total_files,
+                    total_lines=repository.total_lines,
+                    status=RepositoryStatus.FAILED,
+                    created_at=repository.created_at,
+                    analyzed_at=repository.analyzed_at,
+                    migrated_at=repository.migrated_at,
+                    metadata={**repository.metadata, 'error': error_msg}
+                )
+                self.repository_repo.save(repository)
+            except Exception as save_error:
+                print(f"ERROR saving failed repository: {save_error}")
             
             return {
                 'repository_id': repository_id,
                 'repository': repository,
                 'mar': None,
                 'success': False,
-                'error': str(e)
+                'error': error_msg
             }
