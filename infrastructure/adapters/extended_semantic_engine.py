@@ -596,6 +596,10 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         if not has_boto3_usage:
             result_code = re.sub(r'^import boto3\s*$', '', result_code, flags=re.MULTILINE)
             result_code = re.sub(r'^from boto3.*$', '', result_code, flags=re.MULTILINE)
+        
+        # IMPORTANT: After all service migrations, use Gemini to validate and fix any remaining AWS patterns
+        # This ensures complete transformation for multi-service code
+        result_code = self._validate_and_fix_with_gemini(result_code, code)
 
         return result_code
     
@@ -1328,10 +1332,16 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Replace S3 get_object -> GCS download with improved structure
         # Handle both: s3.get_object(...) and response = s3.get_object(...)
         def replace_get_object(match):
-            return f'# ---\n\n### 📥 Download file from GCS\nbucket = gcs_client.bucket(bucket_name)\nblob = bucket.blob(remote_file_name)\ncontent = blob.download_as_text()\nprint(f"File gs://{{bucket_name}}/{{remote_file_name}} downloaded")'
+            # Extract bucket and key from the match
+            bucket_expr = match.group(3) if len(match.groups()) >= 3 else 'bucket_name'
+            key_expr = match.group(4) if len(match.groups()) >= 4 else 'object_key'
+            # Clean up expressions (remove quotes if present)
+            bucket_expr = bucket_expr.strip().strip('\'"')
+            key_expr = key_expr.strip().strip('\'"')
+            return f'bucket = storage_client.bucket({bucket_expr})\nblob = bucket.blob({key_expr})\ncsv_content = blob.download_as_text()'
         
         # Match get_object with optional additional parameters
-        # Pattern: obj = s3.get_object(Bucket=bucket, Key=key)
+        # Pattern: response = s3_client.get_object(Bucket=bucket_name, Key=object_key)
         code = re.sub(
             r'(\w+)\s*=\s*(\w+)\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)[^\)]*\)',
             replace_get_object,
@@ -1343,23 +1353,26 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             code
         )
         
-        # Handle response['Body'].read() pattern - replace with blob content
+        # Handle response['Body'].read().decode('utf-8') pattern - replace with csv_content
         # This should happen after get_object transformation
         code = re.sub(
+            r'(\w+)\[\'Body\'\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)',
+            r'csv_content',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\["Body"\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)',
+            r'csv_content',
+            code
+        )
+        code = re.sub(
             r'(\w+)\[\'Body\'\]\.read\(\)',
-            r'content',
+            r'csv_content',
             code
         )
         code = re.sub(
             r'(\w+)\["Body"\]\.read\(\)',
-            r'content',
-            code
-        )
-        
-        # Handle obj['Body'].read() where obj is the response variable
-        code = re.sub(
-            r'(\w+)\[\'Body\'\]\.read\(\)',
-            r'content',
+            r'csv_content',
             code
         )
         
@@ -1822,29 +1835,53 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
                 # No AWS patterns found, return as-is
                 return refactored_code
             
-            # Use Gemini to fix the code
-            prompt = f"""You are a code refactoring expert. The following Python code was supposed to be refactored from AWS S3 to Google Cloud Storage, but it still contains AWS patterns mixed with GCP code.
+            # Use Gemini to fix the code - handle multi-service Lambda code
+            prompt = f"""You are a code refactoring expert. The following Python code was supposed to be refactored from AWS Lambda (with S3, DynamoDB, SQS, SNS) to Google Cloud Platform, but it still contains AWS patterns mixed with GCP code.
 
 **CRITICAL REQUIREMENTS:**
-1. Remove ALL AWS/boto3 code and replace with correct Google Cloud Storage code
-2. The code should ONLY use `google.cloud.storage` library
-3. Remove any `boto3.resource('s3')` or `boto3.client('s3')` initialization
-4. Replace AWS S3 methods with correct GCS equivalents:
-   - `s3.buckets.all()` → `storage_client.list_buckets()`
-   - `s3.create_bucket()` → `storage_client.create_bucket(bucket_name, location=location)`
-   - `s3.upload_file()` → `bucket.blob(blob_name).upload_from_filename(file_path)`
-   - `s3.download_file()` → `bucket.blob(blob_name).download_to_filename(file_path)`
-   - `s3.list_objects_v2()` → `bucket.list_blobs()`
-   - `s3.delete_object()` → `bucket.blob(blob_name).delete()`
-   - `s3.delete_bucket()` → `storage_client.get_bucket(bucket_name).delete()`
-5. Remove AWS-specific response structures like `ResponseMetadata`, `LocationConstraint`, `ACL`, `CreateBucketConfiguration`
-6. Use correct GCS API patterns - get bucket object first, then blob object, then call methods
-7. Ensure class names are GCP-friendly (e.g., `GCSManager` not `S3Manager`)
-8. Return ONLY the corrected Python code, no explanations
+1. **Lambda Handler Conversion:**
+   - `def lambda_handler(event, context):` → `def process_gcs_file(data, context):` (for GCS-triggered) OR `@functions_framework.http\ndef function_handler(request):` (for HTTP-triggered)
+   - Remove `event['Records']` loop - GCS background functions receive single file events
+   - Replace `event['Records'][0]['s3']['bucket']['name']` → `data.get('bucket')`
+   - Replace `event['Records'][0]['s3']['object']['key']` → `data.get('name')`
+
+2. **S3 to GCS Conversion:**
+   - Remove ALL `boto3.client('s3')` and `boto3.resource('s3')` initialization
+   - Replace `s3_client.get_object(Bucket=bucket_name, Key=object_key)` → `bucket = storage_client.bucket(bucket_name); blob = bucket.blob(object_key); csv_content = blob.download_as_text()`
+   - Replace `response['Body'].read().decode('utf-8')` → `blob.download_as_text()`
+   - Use `from google.cloud import storage` and `storage_client = storage.Client()`
+
+3. **DynamoDB to Firestore Conversion:**
+   - Remove ALL `boto3.client('dynamodb')` initialization
+   - Replace `dynamodb_client.batch_write_item(RequestItems={{...}})` → `batch = firestore_db.batch(); batch.set(doc_ref, item); batch.commit()`
+   - Replace DynamoDB item format `{{'S': 'value'}}` → native Python dicts
+   - Use `from google.cloud import firestore` and `firestore_db = firestore.Client()`
+
+4. **SQS to Pub/Sub Conversion:**
+   - Remove ALL `boto3.client('sqs')` initialization
+   - Replace `sqs_client.send_message(QueueUrl=url, MessageBody=body)` → `pubsub_publisher.publish(topic_path, json.dumps(body).encode('utf-8'))`
+   - Remove `QueueUrl` parameter - use `topic_path` instead
+   - Use `from google.cloud import pubsub_v1` and `pubsub_publisher = pubsub_v1.PublisherClient()`
+
+5. **SNS to Pub/Sub Conversion:**
+   - Remove ALL `boto3.client('sns')` initialization
+   - Replace `sns_client.publish(TopicArn=arn, Message=msg)` → `pubsub_publisher.publish(topic_path, msg.encode('utf-8'))`
+   - Use Pub/Sub topics instead of SNS topics
+
+6. **Environment Variables:**
+   - Replace `DYNAMODB_TABLE_NAME` → `FIRESTORE_COLLECTION_NAME`
+   - Replace `SQS_DLQ_URL` → `PUB_SUB_ERROR_TOPIC` (full path: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
+   - Replace `SNS_TOPIC_ARN` → `PUB_SUB_SUMMARY_TOPIC` (full path)
+
+7. **Exception Handling:**
+   - Replace `s3_client.exceptions.NoSuchKey` → `from google.cloud.exceptions import NotFound` and catch `NotFound`
+   - Remove all `botocore` exception imports
+
+8. **Return ONLY the corrected Python code, no explanations**
 
 **Original AWS Code (for reference):**
 ```python
-{original_code[:2000]}  # First 2000 chars for context
+{original_code[:3000]}  # First 3000 chars for context
 ```
 
 **Incorrectly Refactored Code (needs fixing):**
@@ -1852,7 +1889,7 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
 {refactored_code}
 ```
 
-**Corrected Google Cloud Storage Code:**"""
+**Corrected Google Cloud Platform Code:**"""
             
             response = model.generate_content(prompt)
             corrected_code = response.text.strip()
@@ -2076,16 +2113,72 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Replace Lambda function handler patterns
         # Pattern: def lambda_handler(event, context):
+        # For GCS-triggered functions, use background function signature
         def replace_lambda_handler(match):
-            # Get the body of the lambda handler to preserve it
-            return '@functions_framework.http\ndef function_handler(request):\n    """\n    Google Cloud Function HTTP handler.\n    Args:\n        request (flask.Request): The request object.\n    Returns:\n        The response text or JSON.\n    """\n    request_json = request.get_json(silent=True)\n    # Convert event to Cloud Function request format\n    event = request_json if request_json else {}\n    # Cloud Functions use request object directly'
+            # Check if this is an S3-triggered Lambda (has event['Records'] pattern)
+            # If so, convert to GCS background function
+            # Otherwise, use HTTP function
+            return 'def process_gcs_file(data, context):\n    """\n    Background Cloud Function triggered by a new file in Cloud Storage.\n    The \'data\' parameter contains the bucket and file information.\n    The \'context\' parameter provides event metadata.\n    """'
         
-        code = re.sub(
-            r'def\s+lambda_handler\s*\(\s*event\s*,\s*context\s*\)\s*:',
-            replace_lambda_handler,
-            code,
-            flags=re.IGNORECASE
-        )
+        # First, check if it's an S3-triggered Lambda
+        is_s3_triggered = re.search(r'event\[[\'"]Records[\'"]\]', code) or re.search(r'record_event\[[\'"]s3[\'"]\]', code)
+        
+        if is_s3_triggered:
+            # Replace with GCS background function handler
+            code = re.sub(
+                r'def\s+lambda_handler\s*\(\s*event\s*,\s*context\s*\)\s*:',
+                'def process_gcs_file(data, context):\n    """\n    Background Cloud Function triggered by a new file in Cloud Storage.\n    The \'data\' parameter contains the bucket and file information.\n    The \'context\' parameter provides event metadata.\n    """',
+                code,
+                flags=re.IGNORECASE
+            )
+            
+            # Replace event['Records'] loop with GCS event structure
+            # Pattern: for record_event in event['Records']:
+            code = re.sub(
+                r'for\s+record_event\s+in\s+event\[[\'"]Records[\'"]\]\s*:',
+                '# GCS background function receives single file event, not a list\n    # Process the single file event',
+                code
+            )
+            
+            # Replace event['Records'] access with direct data access
+            # Pattern: if not event.get('Records'):
+            code = re.sub(
+                r'if\s+not\s+event\.get\([\'"]Records[\'"]\)\s*:',
+                'if not data.get(\'bucket\') or not data.get(\'name\'):',
+                code
+            )
+            
+            # Replace record_event['s3']['bucket']['name'] -> data['bucket']
+            code = re.sub(
+                r'record_event\[[\'"]s3[\'"]\]\[[\'"]bucket[\'"]\]\[[\'"]name[\'"]\]',
+                'data.get(\'bucket\')',
+                code
+            )
+            code = re.sub(
+                r'record_event\[[\'"]s3[\'"]\]\[[\'"]object[\'"]\]\[[\'"]key[\'"]\]',
+                'data.get(\'name\')',
+                code
+            )
+            
+            # Replace bucket_name = record_event['s3']['bucket']['name']
+            code = re.sub(
+                r'bucket_name\s*=\s*record_event\[[\'"]s3[\'"]\]\[[\'"]bucket[\'"]\]\[[\'"]name[\'"]\]',
+                'bucket_name = data.get(\'bucket\')',
+                code
+            )
+            code = re.sub(
+                r'object_key\s*=\s*record_event\[[\'"]s3[\'"]\]\[[\'"]object[\'"]\]\[[\'"]key[\'"]\]',
+                'object_key = data.get(\'name\')',
+                code
+            )
+        else:
+            # HTTP-triggered function
+            code = re.sub(
+                r'def\s+lambda_handler\s*\(\s*event\s*,\s*context\s*\)\s*:',
+                '@functions_framework.http\ndef function_handler(request):\n    """\n    Google Cloud Function HTTP handler.\n    Args:\n        request (flask.Request): The request object.\n    Returns:\n        The response text or JSON.\n    """\n    request_json = request.get_json(silent=True)\n    event = request_json if request_json else {}',
+                code,
+                flags=re.IGNORECASE
+            )
         
         # Replace AWS environment variables FIRST (before S3 migration)
         # Handle os.environ.get() with optional default - be more aggressive
@@ -2402,14 +2495,50 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Pattern: with table.batch_writer() as batch:
         code = re.sub(
             r'with\s+(\w+)\.batch_writer\(\)\s+as\s+(\w+):',
-            r'batch = \1.batch()\nwith batch:',
+            r'batch = firestore_db.batch()\nwith batch:',
             code
         )
         # Replace batch.put_item() inside batch_writer context
         # This should match batch.put_item(Item={...}) where batch is the context variable
         code = re.sub(
             r'(\w+)\.put_item\(Item=([^\)]+)\)',
-            r'doc_ref = collection.document()\n    batch.set(doc_ref, \2)',
+            r'doc_ref = collection_ref.document()\n    batch.set(doc_ref, \2)',
+            code
+        )
+        
+        # Replace dynamodb_client.batch_write_item() -> Firestore batch operations
+        # Pattern: dynamodb_client.batch_write_item(RequestItems={TABLE_NAME: [PutRequest: {Item: {...}}]})
+        def replace_batch_write_item(match):
+            client_var = match.group(1)
+            table_name = match.group(2) if len(match.groups()) >= 2 else 'DYNAMODB_TABLE_NAME'
+            # Extract items from PutRequest list
+            return f'batch = firestore_db.batch()\ncollection_ref = firestore_db.collection({table_name})\n# Process items in batches of 500 (Firestore limit)\nfor item in items:\n    doc_id = item.pop(\'uuid\', str(uuid.uuid4()))\n    doc_ref = collection_ref.document(doc_id)\n    batch.set(doc_ref, item)\nbatch.commit()'
+        
+        code = re.sub(
+            r'(\w+)\.batch_write_item\(\s*RequestItems\s*=\s*\{([^:]+):\s*\[([^\]]+)\]\}\s*\)',
+            replace_batch_write_item,
+            code,
+            flags=re.DOTALL
+        )
+        
+        # Also handle simpler pattern: batch_write_item(RequestItems={TABLE: batch})
+        code = re.sub(
+            r'(\w+)\.batch_write_item\(\s*RequestItems\s*=\s*\{([^}]+)\}\s*\)',
+            replace_batch_write_item,
+            code,
+            flags=re.DOTALL
+        )
+        
+        # Replace DynamoDB item format {'S': 'value'} -> native Python dicts
+        # Pattern: {'S': 'value'} -> 'value'
+        code = re.sub(
+            r'\{\s*[\'"]S[\'"]\s*:\s*([^}]+)\s*\}',
+            r'\1',
+            code
+        )
+        code = re.sub(
+            r'\{\s*[\'"]N[\'"]\s*:\s*([^}]+)\s*\}',
+            r'int(\1)',
             code
         )
         
