@@ -31,6 +31,12 @@ This document provides a comprehensive index of all documentation in the Univers
 - **[COMPLETENESS_REPORT.md](COMPLETENESS_REPORT.md)** - Architecture completeness report
 - **[SYNTAX_VALIDATION_IMPLEMENTATION.md](SYNTAX_VALIDATION_IMPLEMENTATION.md)** - Syntax validation implementation details
 - **[IMPORT_CHECK.md](IMPORT_CHECK.md)** - Import checking functionality
+- **[TOON_INTEGRATION_SUMMARY.md](TOON_INTEGRATION_SUMMARY.md)** - TOON format integration for token optimization
+- **[TOON_IMPLEMENTATION_COMPLETE.md](TOON_IMPLEMENTATION_COMPLETE.md)** - TOON implementation status
+- **[GEMINI_TOOLS_IMPLEMENTATION.md](GEMINI_TOOLS_IMPLEMENTATION.md)** - Gemini function calling implementation
+- **[REPOSITORY_MIGRATION_IMPLEMENTATION_STATUS.md](REPOSITORY_MIGRATION_IMPLEMENTATION_STATUS.md)** - Repository-level migration status
+- **[PHASE_5_6_IMPLEMENTATION_SUMMARY.md](PHASE_5_6_IMPLEMENTATION_SUMMARY.md)** - IaC migration and test framework
+- **[FRONTEND_IMPROVEMENTS.md](FRONTEND_IMPROVEMENTS.md)** - Frontend redesign documentation
 
 ## Setup & Configuration
 
@@ -119,12 +125,15 @@ This document provides a comprehensive index of all documentation in the Univers
 ## Documentation Maintenance
 
 ### Last Updated
-- **README.md**: Updated with repository-level migration features
-- **QUICKSTART.md**: Added repository migration examples
+- **README.md**: Updated with agentic UI, TOON integration, repository migration, IaC, and test framework
+- **QUICKSTART.md**: Added web interface, repository migration, and TOON optimization examples
 - **CONTRIBUTING.md**: Added repository-level contribution guidelines
 - **UNIVERSAL_CLOUD_REFACTOR_AGENT_PRD.md**: Added repository-level requirements section
 - **REPOSITORY_LEVEL_MIGRATION.md**: Created from Supplementary PRD
 - **REPOSITORY_MIGRATION_IMPLEMENTATION_PLAN.md**: Created implementation roadmap
+- **TOON_INTEGRATION_SUMMARY.md**: TOON format integration documentation
+- **FRONTEND_IMPROVEMENTS.md**: Frontend redesign documentation
+- **PHASE_5_6_IMPLEMENTATION_SUMMARY.md**: IaC and test framework documentation
 
 ### Documentation Standards
 - All markdown files follow standard Markdown syntax
