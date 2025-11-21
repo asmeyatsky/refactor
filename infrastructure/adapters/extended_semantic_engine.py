@@ -31,7 +31,8 @@ class ExtendedASTTransformationEngine:
     def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> tuple[str, dict]:
         """
         Transform code based on the transformation recipe.
-        Ensures the output is syntactically correct.
+        NEW APPROACH: Use Gemini FIRST for transformation, regex only for simple patterns.
+        This is more reliable than regex-based transformation.
         
         Returns:
             tuple: (transformed_code, variable_mapping) where variable_mapping is a dict
@@ -40,35 +41,378 @@ class ExtendedASTTransformationEngine:
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
 
-        # CRITICAL: Run aggressive AWS cleanup FIRST, before any other processing
-        # This ensures ALL AWS patterns are caught and fixed
+        # NEW APPROACH: Use Gemini as PRIMARY transformer
         if language == 'python':
-            code = self._aggressive_aws_cleanup(code)
-
-        transformer = self.transformers[language]
-        transformed_code = transformer.transform(code, transformation_recipe)
-        
-        # CRITICAL: Run aggressive AWS cleanup AGAIN after transformation
-        # This catches any AWS patterns that were reintroduced during transformation
-        if language == 'python':
-            transformed_code = self._aggressive_aws_cleanup(transformed_code)
-        
-        # Validate syntax for Python code
-        if language == 'python':
+            transformed_code = self._transform_with_gemini_primary(code, transformation_recipe)
+            
+            # Only use regex for simple, unambiguous patterns (imports)
+            transformed_code = self._apply_simple_regex_fixes(transformed_code)
+            
+            # Validate output - reject if still has AWS patterns or syntax errors
+            max_retries = 2
+            retry_count = 0
+            while (self._has_aws_patterns(transformed_code) or not self._is_valid_syntax(transformed_code)) and retry_count < max_retries:
+                retry_count += 1
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Output still contains AWS patterns or syntax errors, retrying (attempt {retry_count}/{max_retries})")
+                transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, retry=True)
+            
+            # If still has issues after retries, use aggressive cleanup as last resort
+            if self._has_aws_patterns(transformed_code):
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning("Gemini transformation still has AWS patterns, applying aggressive cleanup")
+                transformed_code = self._aggressive_aws_cleanup(transformed_code)
+            
+            # Validate syntax
             transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
-        
-        # CRITICAL: Run aggressive AWS cleanup ONE MORE TIME after syntax validation
-        # This is the final safety net
-        if language == 'python':
-            transformed_code = self._aggressive_aws_cleanup(transformed_code)
+        else:
+            # Fallback to existing transformer for non-Python
+            transformer = self.transformers[language]
+            transformed_code = transformer.transform(code, transformation_recipe)
         
         # Get variable mapping if available
         variable_mapping = {}
-        if hasattr(transformer, '_variable_mappings'):
+        if hasattr(self.transformers.get(language), '_variable_mappings'):
             code_id = id(code)
-            variable_mapping = transformer._variable_mappings.get(code_id, {})
+            variable_mapping = self.transformers[language]._variable_mappings.get(code_id, {})
         
         return transformed_code, variable_mapping
+    
+    def _transform_with_gemini_primary(self, code: str, recipe: Dict[str, Any], retry: bool = False) -> str:
+        """Use Gemini as the PRIMARY transformation engine - not as cleanup.
+        
+        This is the correct approach: LLM understands context and semantics,
+        regex is too brittle for complex transformations.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            import google.generativeai as genai
+            from config import Config
+            
+            if not Config.GEMINI_API_KEY:
+                logger.warning("GEMINI_API_KEY not set, falling back to regex")
+                return self._fallback_regex_transform(code, recipe)
+            
+            genai.configure(api_key=Config.GEMINI_API_KEY)
+            # Use correct model names with models/ prefix
+            # Try gemini-2.5-flash (fastest), then gemini-2.5-pro (better quality)
+            try:
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
+            except Exception:
+                try:
+                    model = genai.GenerativeModel('models/gemini-2.5-pro')
+                except Exception:
+                    # Fallback to older models
+                    try:
+                        model = genai.GenerativeModel('models/gemini-pro')
+                    except Exception:
+                        model = genai.GenerativeModel('models/gemini-1.5-flash')
+            
+            service_type = recipe.get('service_type', '')
+            target_api = recipe.get('target_api', 'GCP')
+            
+            # Build comprehensive prompt for direct transformation
+            prompt = self._build_transformation_prompt(code, service_type, target_api, retry)
+            
+            # Add timeout and generation config to prevent hanging
+            import google.generativeai.types as genai_types
+            generation_config = genai_types.GenerationConfig(
+                max_output_tokens=8192,  # Limit output size
+                temperature=0.1,  # Lower temperature for more deterministic output
+            )
+            
+            # Use asyncio timeout or threading timeout to prevent hanging
+            import signal
+            import threading
+            
+            response_result = [None]
+            exception_result = [None]
+            
+            def generate_with_timeout():
+                try:
+                    response_result[0] = model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                        request_options={"timeout": 60}  # 60 second timeout
+                    )
+                except Exception as e:
+                    exception_result[0] = e
+            
+            # Run in a thread with timeout
+            thread = threading.Thread(target=generate_with_timeout)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=90)  # 90 second overall timeout
+            
+            if thread.is_alive():
+                logger.warning("Gemini API call timed out after 90 seconds")
+                raise TimeoutError("Gemini API call timed out")
+            
+            if exception_result[0]:
+                raise exception_result[0]
+            
+            if not response_result[0]:
+                raise Exception("No response from Gemini API")
+            
+            response = response_result[0]
+            transformed_code = response.text.strip()
+            
+            # Extract code from markdown
+            transformed_code = self._extract_code_from_response(transformed_code)
+            
+            logger.info("Gemini primary transformation completed")
+            return transformed_code
+            
+        except Exception as e:
+            logger.warning(f"Gemini transformation failed: {e}, falling back to regex")
+            return self._fallback_regex_transform(code, recipe)
+    
+    def _build_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
+        """Build a comprehensive prompt for Gemini to transform AWS code to GCP."""
+        
+        # Detect services from code
+        services_detected = []
+        if re.search(r'boto3\.(client|resource)\([\'\"]s3[\'\"]', code, re.IGNORECASE) or re.search(r'\.(get_object|put_object|upload_file|download_file)', code):
+            services_detected.append('S3')
+        if re.search(r'boto3\.(client|resource)\([\'\"]dynamodb[\'\"]', code, re.IGNORECASE) or re.search(r'\.(put_item|get_item|batch_write)', code):
+            services_detected.append('DynamoDB')
+        if re.search(r'boto3\.(client|resource)\([\'\"]sqs[\'\"]', code, re.IGNORECASE) or re.search(r'\.send_message', code):
+            services_detected.append('SQS')
+        if re.search(r'boto3\.(client|resource)\([\'\"]sns[\'\"]', code, re.IGNORECASE) or re.search(r'\.publish.*TopicArn', code):
+            services_detected.append('SNS')
+        if re.search(r'lambda_handler\s*\(', code, re.IGNORECASE) or re.search(r'event\[[\'"]Records[\'"]\]', code):
+            services_detected.append('Lambda')
+        
+        services_str = ', '.join(services_detected) if services_detected else 'AWS services'
+        
+        retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
+        
+        prompt = f"""You are an expert code refactoring assistant. Transform the following AWS Python code to Google Cloud Platform (GCP) code.
+
+**CRITICAL REQUIREMENTS:**
+1. **ZERO AWS CODE** - The output must contain NO AWS patterns, variables, or APIs
+2. **Complete transformation** - Every AWS service call must be replaced with its GCP equivalent
+3. **Correct syntax** - Output must be valid, executable Python code
+4. **Proper imports** - Include all necessary GCP SDK imports
+5. **Correct API usage** - Use GCP APIs correctly, not AWS patterns with GCP imports
+
+**SERVICES DETECTED:** {services_str}
+
+**TRANSFORMATION RULES:**
+
+**Lambda → Cloud Functions:**
+- `def lambda_handler(event, context):` → `def process_gcs_file(data, context):` (for GCS triggers)
+- Remove `event['Records']` loop - GCS functions receive single file events
+- `event['Records'][0]['s3']['bucket']['name']` → `data.get('bucket')`
+- `event['Records'][0]['s3']['object']['key']` → `data.get('name')`
+- Remove `return {{'statusCode': 200}}` - Cloud Functions don't return HTTP responses
+- Replace `event` variable → `data` variable throughout
+- Remove `if 's3' not in record_event:` checks
+
+**S3 → Cloud Storage:**
+- `boto3.client('s3')` → `storage.Client()`
+- `s3_client = storage.Client()` → `storage_client = storage.Client()` (rename variable)
+- `s3_client.get_object(Bucket=b, Key=k)` → `bucket = storage_client.bucket(b); blob = bucket.blob(k); content = blob.download_as_text()`
+- `response['Body'].read().decode('utf-8')` → `blob.download_as_text()`
+- `s3://` URLs → `gs://` URLs
+- `storage_client.exceptions.NoSuchKey` → `from google.cloud.exceptions import NotFound`
+- Remove redundant assignments like `csv_content = csv_content`
+
+**DynamoDB → Firestore:**
+- `boto3.client('dynamodb')` → `firestore.Client()`
+- `dynamodb_client = boto3.client('dynamodb')` → `firestore_db = firestore.Client()`
+- Function names: `batch_write_to_dynamodb` → `batch_write_to_firestore`
+- `dynamodb_client.batch_write_item(RequestItems={{TABLE: batch}})` → `batch = firestore_db.batch(); collection_ref = firestore_db.collection(collection_name); for item in items: doc_ref = collection_ref.document(); batch.set(doc_ref, item); batch.commit()`
+- **DO NOT create broken code** like `response = batch = firestore_db.batch()` - fix properly
+- **DO NOT use invalid syntax** like `FIRESTORE_COLLECTION_NAME: batch` - use proper collection reference
+- Remove DynamoDB item format `{{'S': 'value'}}` → use native Python dicts
+- Batch size: 25 (DynamoDB) → 500 (Firestore)
+- Remove UnprocessedItems checking logic
+
+**SQS → Pub/Sub:**
+- `boto3.client('sqs')` → `pubsub_v1.PublisherClient()`
+- `sqs_client = boto3.client('sqs')` → `pubsub_publisher = pubsub_v1.PublisherClient()`
+- Function names: `send_to_dlq` → `publish_error_message`
+- `sqs_client.send_message(QueueUrl=url, MessageBody=body)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, json.dumps(body).encode('utf-8')); future.result()`
+- Remove `QueueUrl` parameter completely
+- Use `PUB_SUB_ERROR_TOPIC` env var (full path format: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
+- Remove duplicate client initialization
+
+**SNS → Pub/Sub:**
+- `boto3.client('sns')` → `pubsub_v1.PublisherClient()` (can reuse same publisher)
+- `sns_client = boto3.client('sns')` → `pubsub_publisher = pubsub_v1.PublisherClient()`
+- Function names: `publish_sns_summary` → `publish_summary_message`
+- `sns_client.publish(TopicArn=arn, Message=msg, Subject=subj)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, msg.encode('utf-8')); future.result()`
+- **REMOVE Subject parameter** - Pub/Sub doesn't support it
+- Use the global `PUB_SUB_SUMMARY_TOPIC` environment variable, don't hardcode topic paths
+- Use `PUB_SUB_SUMMARY_TOPIC` env var (full path format: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
+
+**Environment Variables:**
+- `DYNAMODB_TABLE_NAME` → `FIRESTORE_COLLECTION_NAME`
+- `SQS_DLQ_URL` → `PUB_SUB_ERROR_TOPIC` (format: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
+- `SNS_TOPIC_ARN` → `PUB_SUB_SUMMARY_TOPIC` (format: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
+- Default values must be GCP format, NOT AWS URLs/ARNs
+- Remove comments mentioning "Lambda configuration" - use "Cloud Function configuration"
+
+**Variable Naming:**
+- `s3_client` → `storage_client`
+- `dynamodb_client` → `firestore_db`
+- `sqs_client` → `pubsub_publisher`
+- `sns_client` → `pubsub_publisher`
+- `'s3_key'` → `'object_key'` or `'gcs_file'`
+
+**Exception Handling:**
+- `storage_client.exceptions.NoSuchKey` → `from google.cloud.exceptions import NotFound`
+- Remove all `boto3` and `botocore` imports
+
+**Syntax Requirements:**
+- No broken assignments: `response = batch = firestore_db.batch()` → `batch = firestore_db.batch()`
+- No invalid collection paths: `FIRESTORE_COLLECTION_NAME: batch` → `collection_ref = firestore_db.collection(FIRESTORE_COLLECTION_NAME)`
+- No redundant assignments: `csv_content = csv_content` → remove
+- No duplicate client initializations
+- Proper comment formatting
+- Fix broken Pub/Sub syntax: `future = pubsub_publisher.publish(...))` → `future = pubsub_publisher.publish(...)`
+
+**Return Format:**
+- Remove AWS Lambda response format: `return {{'statusCode': 200, 'body': '...'}}`
+- Cloud Functions return None or raise exceptions
+
+{retry_note}
+
+**INPUT CODE:**
+```python
+{code}
+```
+
+**OUTPUT REQUIREMENTS:**
+- Return ONLY the transformed Python code
+- NO explanations, NO markdown formatting, NO code blocks
+- Just pure, executable Python code
+- Ensure ALL AWS patterns are removed
+- Ensure ALL GCP APIs are used correctly
+
+**TRANSFORMED GCP CODE:**"""
+        
+        return prompt
+    
+    def _extract_code_from_response(self, response_text: str) -> str:
+        """Extract Python code from Gemini response, handling various formats."""
+        # Remove markdown code blocks
+        if '```python' in response_text:
+            parts = response_text.split('```python')
+            if len(parts) > 1:
+                response_text = parts[1].split('```')[0].strip()
+        elif '```' in response_text:
+            parts = response_text.split('```')
+            code_blocks = []
+            for i in range(1, len(parts), 2):
+                if i < len(parts):
+                    block = parts[i].strip()
+                    if block and len(block) > 50:
+                        code_blocks.append(block)
+            if code_blocks:
+                response_text = max(code_blocks, key=len)
+        
+        # Remove explanation text
+        lines = response_text.split('\n')
+        cleaned_lines = []
+        code_started = False
+        for line in lines:
+            stripped = line.strip()
+            if not code_started:
+                if stripped.startswith(('Here', 'The', 'This', '**', '##')):
+                    continue
+                if stripped.startswith(('import', 'from', 'def', 'class')):
+                    code_started = True
+            
+            if code_started or stripped:
+                # Skip markdown headers
+                if stripped.startswith(('##', '###', '**')) and not stripped.startswith('#'):
+                    continue
+                cleaned_lines.append(line)
+        
+        return '\n'.join(cleaned_lines).strip()
+    
+    def _has_aws_patterns(self, code: str) -> bool:
+        """Check if code still contains AWS patterns."""
+        aws_patterns = [
+            r'\bboto3\b',
+            r'\bdynamodb_client\b',
+            r'\bsqs_client\b',
+            r'\bsns_client\b',
+            r'\bs3_client\b',
+            r'\blambda_handler\s*\(',
+            r'event\[[\'"]Records[\'"]\]',
+            r'\.get_object\s*\(',
+            r'\.batch_write_item\s*\(',
+            r'\.send_message\s*\(',
+            r'Bucket\s*=',
+            r'Key\s*=',
+            r'QueueUrl\s*=',
+            r'TopicArn\s*=',
+            r'DYNAMODB_TABLE_NAME',
+            r'SQS_DLQ_URL',
+            r'SNS_TOPIC_ARN',
+            r'return\s+\{\s*[\'"]statusCode[\'"]',
+            r'https://sqs\.',  # SQS URLs
+            r'arn:aws:sns:',  # SNS ARNs
+            r's3://',  # S3 URLs
+            r'\'s3_key\'',  # Dictionary keys
+            r'"s3_key"',
+            r'batch_write_to_dynamodb',  # Function names
+            r'publish_sns_summary',  # Function names
+            r'send_to_dlq',  # Function names
+            r'storage_client\.exceptions\.NoSuchKey',  # Wrong exception
+            r'response\s*=\s*batch\s*=\s*',  # Broken syntax
+            r'FIRESTORE_COLLECTION_NAME:\s*batch',  # Invalid syntax
+            r'Subject\s*=',  # SNS Subject parameter
+            r'json\.dumps\(json\.dumps',  # Double encoding
+        ]
+        
+        for pattern in aws_patterns:
+            if re.search(pattern, code, re.IGNORECASE):
+                return True
+        return False
+    
+    def _apply_simple_regex_fixes(self, code: str) -> str:
+        """Apply only simple, unambiguous regex fixes (imports, basic patterns)."""
+        # Only fix imports - these are unambiguous
+        code = re.sub(r'^import boto3\s*$', '', code, flags=re.MULTILINE)
+        code = re.sub(r'^from boto3.*$', '', code, flags=re.MULTILINE)
+        
+        # Remove any remaining boto3 imports in comments
+        lines = code.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            if 'import boto3' in line and line.strip().startswith('#'):
+                continue
+            cleaned_lines.append(line)
+        code = '\n'.join(cleaned_lines)
+        
+        return code
+    
+    def _is_valid_syntax(self, code: str) -> bool:
+        """Check if code has valid Python syntax."""
+        try:
+            import ast
+            ast.parse(code)
+            return True
+        except SyntaxError:
+            return False
+    
+    def _fallback_regex_transform(self, code: str, recipe: Dict[str, Any]) -> str:
+        """Fallback regex transformation if Gemini is unavailable."""
+        # Use the Python transformer's auto-detect method
+        if 'python' in self.transformers:
+            transformer = self.transformers['python']
+            if hasattr(transformer, '_auto_detect_and_migrate'):
+                return transformer._auto_detect_and_migrate(code)
+        # If transformer doesn't have the method, use aggressive cleanup
+        return self._aggressive_aws_cleanup(code)
     
     def _aggressive_aws_cleanup(self, code: str) -> str:
         """
@@ -139,8 +483,8 @@ class ExtendedASTTransformationEngine:
             result,
             flags=re.DOTALL
         )
-        result = re.sub(r"response\['Body'\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)", 'csv_content', result)
-        result = re.sub(r'response\["Body"\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)', 'csv_content', result)
+        result = re.sub(r"response\['Body'\]\.read\(\)\.decode\(['\"]utf-8['\"]\)", 'csv_content', result)
+        result = re.sub(r'response\["Body"\]\.read\(\)\.decode\(["\']utf-8["\']\)', 'csv_content', result)
         
         # STEP 4: Fix lambda_handler
         result = re.sub(
@@ -729,8 +1073,8 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         )
         
         # Pattern: response['Body'].read().decode('utf-8') -> csv_content
-        result_code = re.sub(r"response\['Body'\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)", 'csv_content', result_code)
-        result_code = re.sub(r'response\["Body"\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)', 'csv_content', result_code)
+        result_code = re.sub(r"response\['Body'\]\.read\(\)\.decode\(['\"]utf-8['\"]\)", 'csv_content', result_code)
+        result_code = re.sub(r'response\["Body"\]\.read\(\)\.decode\(["\']utf-8["\']\)', 'csv_content', result_code)
         
         # CRITICAL: Fix lambda_handler
         result_code = re.sub(
@@ -985,8 +1329,8 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             result_code
         )
         # Pattern: response['Body'].read().decode('utf-8') -> csv_content
-        result_code = re.sub(r"response\['Body'\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)", 'csv_content', result_code)
-        result_code = re.sub(r'response\["Body"\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)', 'csv_content', result_code)
+        result_code = re.sub(r"response\['Body'\]\.read\(\)\.decode\(['\"]utf-8['\"]\)", 'csv_content', result_code)
+        result_code = re.sub(r'response\["Body"\]\.read\(\)\.decode\(["\']utf-8["\']\)', 'csv_content', result_code)
         
         # AGGRESSIVE: Fix lambda_handler if still present
         result_code = re.sub(
@@ -2312,7 +2656,19 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
                 return refactored_code
             
             genai.configure(api_key=Config.GEMINI_API_KEY)
-            model = genai.GenerativeModel('gemini-1.5-pro')
+            # Use correct model names with models/ prefix
+            # Try gemini-2.5-flash (fastest), then gemini-2.5-pro (better quality)
+            try:
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
+            except Exception:
+                try:
+                    model = genai.GenerativeModel('models/gemini-2.5-pro')
+                except Exception:
+                    # Fallback to older models
+                    try:
+                        model = genai.GenerativeModel('models/gemini-pro')
+                    except Exception:
+                        model = genai.GenerativeModel('models/gemini-1.5-flash')
             
             # Check if code still has AWS patterns - be comprehensive
             aws_patterns = [
@@ -2414,12 +2770,18 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             prompt = f"""You are a code refactoring expert. The following Python code was supposed to be refactored from AWS Lambda (with S3, DynamoDB, SQS, SNS) to Google Cloud Platform, but it still contains AWS patterns mixed with GCP code.
 
 **CRITICAL REQUIREMENTS - ZERO TOLERANCE FOR AWS CODE:**
+
 1. **Lambda Handler Conversion (MANDATORY):**
    - `def lambda_handler(event, context):` → `def process_gcs_file(data, context):` (for GCS-triggered)
    - Remove `event['Records']` loop completely - GCS background functions receive single file events
    - Replace `event['Records'][0]['s3']['bucket']['name']` → `data.get('bucket')`
    - Replace `event['Records'][0]['s3']['object']['key']` → `data.get('name')`
    - Replace `for record_event in event['Records']:` → Remove loop, process single file directly
+   - Replace `if not event.get('Records'):` → `if not data.get('bucket') or not data.get('name'):`
+   - Replace `if 's3' not in record_event:` → Remove this check (GCS events don't have 's3' key)
+   - Replace ALL references to `event` variable → `data` variable
+   - Remove AWS Lambda response format: `return {{'statusCode': 200, 'body': ...}}` → Just `return` or raise exceptions
+   - Cloud Functions don't return HTTP status codes - they raise exceptions for errors
 
 2. **S3 to GCS Conversion (MANDATORY):**
    - Remove ALL `boto3.client('s3')` and `boto3.resource('s3')` initialization
@@ -2428,38 +2790,53 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
    - Replace `response = s3_client.get_object(...)` → Use bucket.blob pattern above
    - Replace `response['Body'].read().decode('utf-8')` → `blob.download_as_text()`
    - Replace ALL `s3_client.` method calls → Use `storage_client.bucket().blob()` pattern
+   - Replace `s3://` URLs → `gs://` URLs in print statements and comments
+   - Replace `storage_client.exceptions.NoSuchKey` → `from google.cloud.exceptions import NotFound` and catch `NotFound`
    - Use `from google.cloud import storage` and `storage_client = storage.Client()`
+   - Remove redundant assignments like `csv_content = csv_content`
 
 3. **DynamoDB to Firestore Conversion (MANDATORY):**
    - Remove ALL `boto3.client('dynamodb')` initialization
    - Replace `dynamodb_client = boto3.client('dynamodb')` → `firestore_db = firestore.Client()`
-   - Replace `dynamodb_client.batch_write_item(RequestItems={{TABLE: [PutRequest: {{Item: ...}}]}})` → `batch = firestore_db.batch(); collection_ref = firestore_db.collection(collection_name); for item in items: doc_ref = collection_ref.document(); batch.set(doc_ref, item); batch.commit()`
+   - Replace function names: `batch_write_to_dynamodb` → `batch_write_to_firestore`
+   - Replace `dynamodb_client.batch_write_item(RequestItems={{TABLE: batch}})` → `batch = firestore_db.batch(); collection_ref = firestore_db.collection(collection_name); for item in items: doc_ref = collection_ref.document(); batch.set(doc_ref, item); batch.commit()`
+   - DO NOT create broken code like `response = batch = firestore_db.batch()` - fix this properly
+   - DO NOT use invalid syntax like `FIRESTORE_COLLECTION_NAME: batch` - use proper collection reference
    - Replace DynamoDB item format `{{'S': 'value'}}` → native Python dicts (just `'value'`)
    - Replace `{{'N': '123'}}` → `123` (integer)
+   - Remove DynamoDB-specific logic: batch size 25, UnprocessedItems checking - Firestore uses batch size 500
    - Use `from google.cloud import firestore` and `firestore_db = firestore.Client()`
 
 4. **SQS to Pub/Sub Conversion (MANDATORY):**
    - Remove ALL `boto3.client('sqs')` initialization
    - Replace `sqs_client = boto3.client('sqs')` → `pubsub_publisher = pubsub_v1.PublisherClient()`
-   - Replace `sqs_client.send_message(QueueUrl=url, MessageBody=body)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, json.dumps(body).encode('utf-8'))`
+   - Replace function names: `send_to_dlq` → `publish_error_message`
+   - Replace `sqs_client.send_message(QueueUrl=url, MessageBody=body)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, json.dumps(body).encode('utf-8')); future.result()`
    - Remove `QueueUrl` parameter completely - use `topic_path` instead
-   - Replace `SQS_DLQ_URL` env var → `PUB_SUB_ERROR_TOPIC` (full path format)
+   - Replace `SQS_DLQ_URL` env var → `PUB_SUB_ERROR_TOPIC` (full path format: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
    - Use `from google.cloud import pubsub_v1` and `pubsub_publisher = pubsub_v1.PublisherClient()`
+   - Remove duplicate client initialization - only initialize once
 
 5. **SNS to Pub/Sub Conversion (MANDATORY):**
    - Remove ALL `boto3.client('sns')` initialization
    - Replace `sns_client = boto3.client('sns')` → `pubsub_publisher = pubsub_v1.PublisherClient()` (can reuse same publisher)
-   - Replace `sns_client.publish(TopicArn=arn, Message=msg)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, msg.encode('utf-8'))`
-   - Replace `SNS_TOPIC_ARN` env var → `PUB_SUB_SUMMARY_TOPIC` (full path format)
+   - Replace function names: `publish_sns_summary` → `publish_summary_message`
+   - Replace `sns_client.publish(TopicArn=arn, Message=msg, Subject=subj)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, msg.encode('utf-8')); future.result()`
+   - REMOVE `Subject=` parameter - Pub/Sub doesn't support it, use message attributes if needed
+   - Use the global `PUB_SUB_SUMMARY_TOPIC` environment variable, don't hardcode topic paths
+   - Replace `SNS_TOPIC_ARN` env var → `PUB_SUB_SUMMARY_TOPIC` (full path format: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
    - Use Pub/Sub topics instead of SNS topics
 
 6. **Environment Variables (MANDATORY):**
    - Replace `DYNAMODB_TABLE_NAME` → `FIRESTORE_COLLECTION_NAME`
    - Replace `SQS_DLQ_URL` → `PUB_SUB_ERROR_TOPIC` (full path: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
    - Replace `SNS_TOPIC_ARN` → `PUB_SUB_SUMMARY_TOPIC` (full path: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
+   - Default values must be GCP format, NOT AWS URLs/ARNs
+   - Remove comments mentioning "Lambda configuration" - use "Cloud Function configuration"
 
 7. **Exception Handling (MANDATORY):**
    - Replace `s3_client.exceptions.NoSuchKey` → `from google.cloud.exceptions import NotFound` and catch `NotFound`
+   - Replace `storage_client.exceptions.NoSuchKey` → `from google.cloud.exceptions import NotFound` and catch `NotFound`
    - Remove all `botocore` exception imports
    - Remove all `boto3` imports
 
@@ -2468,8 +2845,22 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
    - Replace `dynamodb_client` → `firestore_db`
    - Replace `sqs_client` → `pubsub_publisher`
    - Replace `sns_client` → `pubsub_publisher`
+   - Replace dictionary keys: `'s3_key'` → `'object_key'` or `'gcs_file'`
 
-9. **Return ONLY the corrected Python code, NO explanations, NO markdown, just pure Python code**
+9. **Syntax Fixes (MANDATORY):**
+   - Fix comment syntax: If a line starts with `#` but the next line is code, ensure proper comment formatting
+   - Remove redundant assignments: `csv_content = csv_content` → Remove
+   - Remove duplicate client initializations: Only initialize each client once
+   - Fix broken Pub/Sub syntax: `future = pubsub_publisher.publish(...))` → `future = pubsub_publisher.publish(...)`
+   - Fix broken batch syntax: `response = batch = firestore_db.batch()` → `batch = firestore_db.batch()`
+   - Fix invalid collection path: `FIRESTORE_COLLECTION_NAME: batch` → `collection_ref = firestore_db.collection(FIRESTORE_COLLECTION_NAME)`
+
+10. **Return Format (MANDATORY):**
+    - Remove AWS Lambda response format: `return {{'statusCode': 200, 'body': '...'}}`
+    - Cloud Functions return None or raise exceptions - no status codes
+    - Replace with: `return` or `raise Exception(...)`
+
+11. **Return ONLY the corrected Python code, NO explanations, NO markdown, just pure Python code**
 
 **Original AWS Code (for reference):**
 ```python
@@ -2483,7 +2874,45 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
 
 **Corrected Google Cloud Platform Code (pure Python, no AWS code):**"""
             
-            response = model.generate_content(prompt)
+            # Add timeout handling for Gemini validation
+            import threading
+            
+            response_result = [None]
+            exception_result = [None]
+            
+            def generate_with_timeout():
+                try:
+                    import google.generativeai.types as genai_types
+                    generation_config = genai_types.GenerationConfig(
+                        max_output_tokens=8192,
+                        temperature=0.1,
+                    )
+                    response_result[0] = model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                        request_options={"timeout": 60}
+                    )
+                except Exception as e:
+                    exception_result[0] = e
+            
+            thread = threading.Thread(target=generate_with_timeout)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=90)
+            
+            if thread.is_alive():
+                logger.warning("Gemini validation call timed out after 90 seconds")
+                return refactored_code  # Return original if timeout
+            
+            if exception_result[0]:
+                logger.warning(f"Gemini validation error: {exception_result[0]}")
+                return refactored_code
+            
+            if not response_result[0]:
+                logger.warning("No response from Gemini validation")
+                return refactored_code
+            
+            response = response_result[0]
             corrected_code = response.text.strip()
             
             # Extract code from markdown code blocks if present - be more aggressive

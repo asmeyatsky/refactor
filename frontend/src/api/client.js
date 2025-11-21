@@ -61,7 +61,10 @@ export const migrateRepository = async ({ repositoryId, services, createPR = fal
 // Function to get migration status (for polling)
 export const getMigrationStatus = async (migrationId) => {
   try {
-    const response = await apiClient.get(`/api/migration/${migrationId}`);
+    // Use a longer timeout for status polling since refactoring can take time
+    const response = await axios.get(`${API_BASE_URL}/api/migration/${migrationId}`, {
+      timeout: 10000, // 10 seconds per poll request
+    });
     return response.data;
   } catch (error) {
     console.error('Get migration status error:', error);

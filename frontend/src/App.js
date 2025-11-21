@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   AppBar,
   Toolbar,
@@ -78,6 +78,24 @@ const App = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
+  
+  // Refs to store interval and timeout IDs for cleanup
+  const pollIntervalRef = useRef(null);
+  const timeoutRef = useRef(null);
+  
+  // Cleanup intervals and timeouts on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, []);
 
   const handleNext = () => {
     if (activeStep === 0 && !cloudProvider) {
@@ -108,6 +126,16 @@ const App = () => {
   };
 
   const handleReset = () => {
+    // Cleanup any running intervals/timeouts
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    
     setActiveStep(0);
     setCloudProvider(null);
     setInputMethod(null);
@@ -119,6 +147,7 @@ const App = () => {
     setMigrationResult(null);
     setError(null);
     setAnalysisResult(null);
+    setLoading(false);
   };
 
   const handleAnalyzeRepository = async () => {
@@ -146,6 +175,16 @@ const App = () => {
   };
 
   const handleMigrate = async () => {
+    // Clear any existing intervals/timeouts before starting a new migration
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    
     setLoading(true);
     setError(null);
     setMigrationResult(null);
@@ -164,17 +203,21 @@ const App = () => {
         // Poll for completion
         const migrationId = initialResponse.migration_id;
         if (migrationId) {
-          let pollInterval;
-          let timeoutId;
-          
           // Poll every 1 second until completed
-          pollInterval = setInterval(async () => {
+          pollIntervalRef.current = setInterval(async () => {
             try {
               const statusResponse = await getMigrationStatus(migrationId);
               
               if (statusResponse.status === 'completed') {
-                clearInterval(pollInterval);
-                if (timeoutId) clearTimeout(timeoutId);
+                // Cleanup
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                if (timeoutRef.current) {
+                  clearTimeout(timeoutRef.current);
+                  timeoutRef.current = null;
+                }
                 // Extract refactored code and format result
                 const finalResult = {
                   success: true,
@@ -187,8 +230,15 @@ const App = () => {
                 setActiveStep(3);
                 setLoading(false);
               } else if (statusResponse.status === 'failed') {
-                clearInterval(pollInterval);
-                if (timeoutId) clearTimeout(timeoutId);
+                // Cleanup
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                if (timeoutRef.current) {
+                  clearTimeout(timeoutRef.current);
+                  timeoutRef.current = null;
+                }
                 setError(statusResponse.result?.error || 'Refactoring failed');
                 setLoading(false);
               }
@@ -199,12 +249,15 @@ const App = () => {
             }
           }, 1000); // Poll every 1 second
           
-          // Set timeout after 60 seconds
-          timeoutId = setTimeout(() => {
-            clearInterval(pollInterval);
-              setError('Refactoring timeout - please check the refactoring status manually');
+          // Set timeout after 5 minutes (300 seconds) to allow for Gemini API calls and processing
+          timeoutRef.current = setTimeout(() => {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+            setError('Refactoring timeout - please check the refactoring status manually');
             setLoading(false);
-          }, 60000);
+          }, 300000); // 5 minutes
         } else {
           // Fallback if no migration_id
           setMigrationResult(initialResponse);
@@ -231,6 +284,15 @@ const App = () => {
         setLoading(false);
       }
     } catch (err) {
+      // Cleanup on error
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+      if (timeoutRef.current) {
+        clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
       setError(err.message || 'Refactoring failed');
       setLoading(false);
     }
