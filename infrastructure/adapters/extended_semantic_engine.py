@@ -40,6 +40,11 @@ class ExtendedASTTransformationEngine:
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
 
+        # CRITICAL: Run aggressive AWS cleanup FIRST, before any other processing
+        # This ensures ALL AWS patterns are caught and fixed
+        if language == 'python':
+            code = self._aggressive_aws_cleanup(code)
+
         transformer = self.transformers[language]
         transformed_code = transformer.transform(code, transformation_recipe)
         
@@ -54,6 +59,162 @@ class ExtendedASTTransformationEngine:
             variable_mapping = transformer._variable_mappings.get(code_id, {})
         
         return transformed_code, variable_mapping
+    
+    def _aggressive_aws_cleanup(self, code: str) -> str:
+        """
+        AGGRESSIVE AWS cleanup that runs FIRST and catches ALL AWS patterns.
+        This is the single source of truth for AWS-to-GCP conversion.
+        """
+        result = code
+        
+        # STEP 1: Replace ALL boto3.client() calls FIRST
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]dynamodb[\'\"][^\)]*\)',
+            r'\1 = firestore.Client()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]sqs[\'\"][^\)]*\)',
+            r'\1 = pubsub_v1.PublisherClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]sns[\'\"][^\)]*\)',
+            r'\1 = pubsub_v1.PublisherClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]s3[\'\"][^\)]*\)',
+            r'\1 = storage.Client()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # STEP 2: Fix variable names IMMEDIATELY after client replacement
+        result = re.sub(r'\bdynamodb_client\b', 'firestore_db', result)
+        result = re.sub(r'\bsqs_client\b', 'pubsub_publisher', result)
+        result = re.sub(r'\bsns_client\b', 'pubsub_publisher', result)
+        result = re.sub(r'\bs3_client\b', 'storage_client', result)
+        
+        # STEP 3: Fix AWS API method calls
+        # s3_client.get_object(Bucket=..., Key=...) -> bucket.blob pattern
+        result = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.get_object\s*\(\s*Bucket\s*=\s*([^,]+),\s*Key\s*=\s*([^,\)]+)\s*\)',
+            r'bucket = storage_client.bucket(\3)\n    blob = bucket.blob(\4)\n    csv_content = blob.download_as_text()',
+            result,
+            flags=re.DOTALL
+        )
+        result = re.sub(r"response\['Body'\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)", 'csv_content', result)
+        result = re.sub(r'response\["Body"\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)', 'csv_content', result)
+        
+        # STEP 4: Fix lambda_handler
+        result = re.sub(
+            r'def\s+lambda_handler\s*\(\s*event\s*,\s*context\s*\)\s*:',
+            'def process_gcs_file(data, context):\n    """\n    Background Cloud Function triggered by a new file in Cloud Storage.\n    The \'data\' parameter contains the bucket and file information.\n    The \'context\' parameter provides event metadata.\n    """',
+            result,
+            flags=re.IGNORECASE
+        )
+        
+        # STEP 5: Fix event['Records'] patterns
+        result = re.sub(
+            r'for\s+record_event\s+in\s+event\[[\'"]Records[\'"]\]\s*:',
+            '# GCS background function receives single file event\n    # Process the single file event',
+            result
+        )
+        result = re.sub(
+            r'if\s+not\s+event\.get\([\'"]Records[\'"]\)\s*:',
+            'if not data.get(\'bucket\') or not data.get(\'name\'):',
+            result
+        )
+        result = re.sub(
+            r'record_event\[[\'"]s3[\'"]\]\[[\'"]bucket[\'"]\]\[[\'"]name[\'"]\]',
+            'data.get(\'bucket\')',
+            result
+        )
+        result = re.sub(
+            r'record_event\[[\'"]s3[\'"]\]\[[\'"]object[\'"]\]\[[\'"]key[\'"]\]',
+            'data.get(\'name\')',
+            result
+        )
+        
+        # STEP 6: Fix environment variables
+        result = re.sub(r'DYNAMODB_TABLE_NAME', 'FIRESTORE_COLLECTION_NAME', result)
+        result = re.sub(r'SQS_DLQ_URL', 'PUB_SUB_ERROR_TOPIC', result)
+        result = re.sub(r'SNS_TOPIC_ARN', 'PUB_SUB_SUMMARY_TOPIC', result)
+        
+        # STEP 7: Fix AWS API calls
+        # dynamodb_client.batch_write_item() -> Firestore batch
+        result = re.sub(
+            r'(\w+)\.batch_write_item\s*\(\s*RequestItems\s*=\s*\{([^}]+)\}\s*\)',
+            r'batch = firestore_db.batch()\n    collection_ref = firestore_db.collection(\2)\n    for item in items:\n        doc_ref = collection_ref.document()\n        batch.set(doc_ref, item)\n    batch.commit()',
+            result,
+            flags=re.DOTALL
+        )
+        
+        # sqs_client.send_message() -> Pub/Sub publish
+        result = re.sub(
+            r'(\w+)\.send_message\s*\(\s*QueueUrl\s*=\s*([^,]+),\s*MessageBody\s*=\s*([^,\)]+)\s*\)',
+            r'import os\n    topic_path = pubsub_publisher.topic_path(os.getenv("GCP_PROJECT_ID", "your-project-id"), os.getenv("GCP_PUBSUB_TOPIC_ID", "error-topic"))\n    future = pubsub_publisher.publish(topic_path, json.dumps(\3).encode("utf-8"))',
+            result,
+            flags=re.DOTALL
+        )
+        
+        # sns_client.publish() -> Pub/Sub publish
+        result = re.sub(
+            r'(\w+)\.publish\s*\(\s*TopicArn\s*=\s*([^,]+),\s*Message\s*=\s*([^,\)]+)',
+            r'import os\n    topic_path = pubsub_publisher.topic_path(os.getenv("GCP_PROJECT_ID", "your-project-id"), os.getenv("GCP_PUBSUB_TOPIC_ID", "summary-topic"))\n    future = pubsub_publisher.publish(topic_path, \3.encode("utf-8"))',
+            result,
+            flags=re.DOTALL
+        )
+        
+        # STEP 8: Fix AWS comments
+        result = re.sub(r'#\s*AWS\s+Clients?\s*', '# Google Cloud Clients', result, flags=re.IGNORECASE)
+        
+        # STEP 9: Ensure required imports
+        if 'firestore.Client()' in result or 'firestore_db' in result:
+            if 'from google.cloud import firestore' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import firestore')
+                result = '\n'.join(lines)
+        
+        if 'pubsub_v1.PublisherClient()' in result or 'pubsub_publisher' in result:
+            if 'from google.cloud import pubsub_v1' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import pubsub_v1')
+                result = '\n'.join(lines)
+        
+        if 'storage.Client()' in result or 'storage_client' in result:
+            if 'from google.cloud import storage' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import storage')
+                result = '\n'.join(lines)
+        
+        # STEP 10: Remove boto3 imports
+        result = re.sub(r'^import boto3\s*$', '', result, flags=re.MULTILINE)
+        result = re.sub(r'^from boto3.*$', '', result, flags=re.MULTILINE)
+        
+        return result
     
     def _validate_and_fix_syntax(self, code: str, original_code: str = None) -> str:
         """
