@@ -580,6 +580,142 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         result_code = re.sub(r'(\w+)\s*=\s*boto3\.resource\s*\(\s*[\'\"]s3[\'\"][^\)]*\)', r'\1 = storage.Client()', result_code)
         result_code = re.sub(r'(\w+)\s*=\s*boto3\.resource\s*\(\s*[\'\"]dynamodb[\'\"][^\)]*\)', r'\1 = firestore.Client()', result_code)
         
+        # AGGRESSIVE CLEANUP: Fix variable names that were incorrectly assigned
+        # Pattern: s3_client = storage.Client() -> storage_client = storage.Client()
+        result_code = re.sub(r'\bs3_client\s*=\s*storage\.Client\(\)', 'storage_client = storage.Client()', result_code)
+        # Pattern: s3_client.get_object(...) -> Fix to use bucket.blob pattern
+        # This should have been caught by S3 migration, but ensure it's fixed
+        result_code = re.sub(
+            r'(\w+)\s*=\s*s3_client\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
+            r'bucket = storage_client.bucket(\2)\n    blob = bucket.blob(\3)\n    csv_content = blob.download_as_text()',
+            result_code
+        )
+        # Pattern: response = s3_client.get_object(...) -> Fix
+        result_code = re.sub(
+            r'response\s*=\s*s3_client\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
+            r'bucket = storage_client.bucket(\1)\n    blob = bucket.blob(\2)\n    csv_content = blob.download_as_text()',
+            result_code
+        )
+        # Pattern: Replace s3_client. method calls with storage_client.
+        result_code = re.sub(r'\bs3_client\.', 'storage_client.', result_code)
+        
+        # AGGRESSIVE: Fix DynamoDB client assignments that weren't caught
+        # Pattern: dynamodb_client = boto3.client('dynamodb') -> firestore_db = firestore.Client()
+        result_code = re.sub(
+            r'dynamodb_client\s*=\s*boto3\.client\([\'\"]dynamodb[\'\"][^\)]*\)',
+            'firestore_db = firestore.Client()',
+            result_code,
+            flags=re.DOTALL
+        )
+        # Pattern: dynamodb_client = ... -> firestore_db = ...
+        result_code = re.sub(r'\bdynamodb_client\s*=\s*', 'firestore_db = ', result_code)
+        # Pattern: dynamodb_client. method calls -> firestore_db.
+        result_code = re.sub(r'\bdynamodb_client\.', 'firestore_db.', result_code)
+        
+        # AGGRESSIVE: Fix SQS client assignments
+        # Pattern: sqs_client = boto3.client('sqs') -> pubsub_publisher = pubsub_v1.PublisherClient()
+        result_code = re.sub(
+            r'sqs_client\s*=\s*boto3\.client\([\'\"]sqs[\'\"][^\)]*\)',
+            'pubsub_publisher = pubsub_v1.PublisherClient()',
+            result_code,
+            flags=re.DOTALL
+        )
+        # Pattern: sqs_client = ... -> pubsub_publisher = ...
+        result_code = re.sub(r'\bsqs_client\s*=\s*', 'pubsub_publisher = ', result_code)
+        # Pattern: sqs_client. method calls -> pubsub_publisher.
+        result_code = re.sub(r'\bsqs_client\.', 'pubsub_publisher.', result_code)
+        
+        # AGGRESSIVE: Fix SNS client assignments
+        # Pattern: sns_client = boto3.client('sns') -> pubsub_publisher = pubsub_v1.PublisherClient()
+        result_code = re.sub(
+            r'sns_client\s*=\s*boto3\.client\([\'\"]sns[\'\"][^\)]*\)',
+            'pubsub_publisher = pubsub_v1.PublisherClient()',
+            result_code,
+            flags=re.DOTALL
+        )
+        # Pattern: sns_client = ... -> pubsub_publisher = ...
+        result_code = re.sub(r'\bsns_client\s*=\s*', 'pubsub_publisher = ', result_code)
+        # Pattern: sns_client. method calls -> pubsub_publisher.
+        result_code = re.sub(r'\bsns_client\.', 'pubsub_publisher.', result_code)
+        
+        # AGGRESSIVE: Fix environment variable names
+        result_code = re.sub(r"DYNAMODB_TABLE_NAME", 'FIRESTORE_COLLECTION_NAME', result_code)
+        result_code = re.sub(r"SQS_DLQ_URL", 'PUB_SUB_ERROR_TOPIC', result_code)
+        result_code = re.sub(r"SNS_TOPIC_ARN", 'PUB_SUB_SUMMARY_TOPIC', result_code)
+        
+        # AGGRESSIVE: Fix AWS API method calls that weren't caught
+        # Pattern: s3_client.get_object(Bucket=..., Key=...) -> bucket.blob pattern
+        result_code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.get_object\(Bucket=([^,]+),\s*Key=([^,\)]+)\)',
+            r'bucket = storage_client.bucket(\3)\n    blob = bucket.blob(\4)\n    csv_content = blob.download_as_text()',
+            result_code
+        )
+        # Pattern: response['Body'].read().decode('utf-8') -> csv_content
+        result_code = re.sub(r"response\['Body'\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)", 'csv_content', result_code)
+        result_code = re.sub(r'response\["Body"\]\.read\(\)\.decode\([\'"]utf-8[\'"]\)', 'csv_content', result_code)
+        
+        # AGGRESSIVE: Fix lambda_handler if still present
+        result_code = re.sub(
+            r'def\s+lambda_handler\s*\(\s*event\s*,\s*context\s*\)\s*:',
+            'def process_gcs_file(data, context):\n    """\n    Background Cloud Function triggered by a new file in Cloud Storage.\n    The \'data\' parameter contains the bucket and file information.\n    The \'context\' parameter provides event metadata.\n    """',
+            result_code,
+            flags=re.IGNORECASE
+        )
+        
+        # AGGRESSIVE: Fix event['Records'] patterns
+        result_code = re.sub(
+            r'for\s+record_event\s+in\s+event\[[\'"]Records[\'"]\]\s*:',
+            '# GCS background function receives single file event, not a list\n    # Process the single file event',
+            result_code
+        )
+        result_code = re.sub(
+            r'if\s+not\s+event\.get\([\'"]Records[\'"]\)\s*:',
+            'if not data.get(\'bucket\') or not data.get(\'name\'):',
+            result_code
+        )
+        
+        # AGGRESSIVE: Remove AWS comments
+        result_code = re.sub(r'#\s*AWS\s+Clients?\s*', '# Google Cloud Clients', result_code, flags=re.IGNORECASE)
+        result_code = re.sub(r'#\s*AWS\s+.*', '', result_code, flags=re.IGNORECASE)
+        
+        # AGGRESSIVE: Ensure required imports are present
+        if 'storage_client' in result_code or 'storage.Client()' in result_code:
+            if 'from google.cloud import storage' not in result_code:
+                # Add import at the top
+                lines = result_code.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import storage')
+                result_code = '\n'.join(lines)
+        
+        if 'firestore_db' in result_code or 'firestore.Client()' in result_code:
+            if 'from google.cloud import firestore' not in result_code:
+                lines = result_code.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import firestore')
+                result_code = '\n'.join(lines)
+        
+        if 'pubsub_publisher' in result_code or 'pubsub_v1' in result_code:
+            if 'from google.cloud import pubsub_v1' not in result_code:
+                lines = result_code.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import pubsub_v1')
+                result_code = '\n'.join(lines)
+        
         # Final cleanup: remove boto3 import if no boto3 usage remains
         lines = result_code.split('\n')
         has_boto3_usage = False
@@ -599,6 +735,7 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # IMPORTANT: After all service migrations, use Gemini to validate and fix any remaining AWS patterns
         # This ensures complete transformation for multi-service code
+        # ALWAYS run Gemini validation - it's safer to over-validate
         result_code = self._validate_and_fix_with_gemini(result_code, code)
 
         return result_code
@@ -1802,7 +1939,13 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
                 'Bucket=', 'Key=', 'QueueUrl=', 'TopicArn=', 'TableName=',
                 'FunctionName=', 'InvocationType=', 'Payload=', 'Region=',
                 'aws_access_key', 'aws_secret', 'AWS_ACCESS_KEY', 'AWS_SECRET',
-                'amazonaws.com', '.s3.', 's3://', 'S3Manager', 'S3Client'
+                'amazonaws.com', '.s3.', 's3://', 'S3Manager', 'S3Client',
+                'dynamodb_client', 'sqs_client', 'sns_client', 'lambda_handler',
+                'DYNAMODB_TABLE_NAME', 'SQS_DLQ_URL', 'SNS_TOPIC_ARN',
+                'event[\'Records\']', 'event["Records"]', 'record_event[\'s3\']',
+                'record_event["s3"]', 'get_object', 'batch_write_item',
+                'send_message', 'QueueUrl', 'TopicArn', 'RequestItems',
+                'PutRequest', 'Item=', 'MessageBody=', 'Message='
             ]
             
             # Check for patterns (case-insensitive for some)
@@ -1815,6 +1958,7 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
             
             # Also check for common AWS method patterns
             aws_method_patterns = [
+                r'\bboto3\s*\.\s*(client|resource)\s*\(',
                 r'\bs3\s*\.\s*\w+',  # s3.something
                 r'\w+\s*\.\s*create_bucket\s*\(',
                 r'\w+\s*\.\s*upload_file\s*\(',
@@ -1823,6 +1967,12 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
                 r'\w+\s*\.\s*delete_object\s*\(',
                 r'\w+\s*\.\s*put_object\s*\(',
                 r'\w+\s*\.\s*get_object\s*\(',
+                r'\w+\s*\.\s*batch_write_item\s*\(',
+                r'\w+\s*\.\s*send_message\s*\(',
+                r'\w+\s*\.\s*publish\s*\([^)]*TopicArn',
+                r'lambda_handler\s*\(',
+                r'event\s*\[\s*[\'"]Records[\'"]\s*\]',
+                r'record_event\s*\[\s*[\'"]s3[\'"]\s*\]',
             ]
             
             if not has_aws_patterns:
@@ -1831,74 +1981,181 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
                         has_aws_patterns = True
                         break
             
+            # ALWAYS run Gemini validation if there are ANY AWS patterns detected
+            # This ensures we catch everything, even if regex missed something
             if not has_aws_patterns:
-                # No AWS patterns found, return as-is
-                return refactored_code
+                # Double-check with more aggressive patterns
+                aggressive_patterns = [
+                    r'boto3',
+                    r'\.get_object\s*\(',
+                    r'\.batch_write_item\s*\(',
+                    r'\.send_message\s*\(',
+                    r'Bucket\s*=',
+                    r'Key\s*=',
+                    r'QueueUrl\s*=',
+                    r'TopicArn\s*=',
+                    r'RequestItems\s*=',
+                    r'DYNAMODB',
+                    r'SQS_',
+                    r'SNS_',
+                    r'lambda_handler',
+                ]
+                for pattern in aggressive_patterns:
+                    if re.search(pattern, refactored_code, re.IGNORECASE):
+                        has_aws_patterns = True
+                        break
+            
+            # ALWAYS validate with Gemini for multi-service code (Lambda with S3/DynamoDB/SQS/SNS)
+            # Check if this is multi-service code
+            is_multi_service = (
+                re.search(r'\blambda_handler\s*\(', refactored_code, re.IGNORECASE) or
+                re.search(r'\bprocess_gcs_file\s*\(', refactored_code, re.IGNORECASE) or
+                re.search(r'event\s*\[\s*[\'"]Records[\'"]\s*\]', refactored_code) or
+                (re.search(r'\b(get_object|batch_write|send_message|publish)\s*\(', refactored_code) and
+                 re.search(r'\b(storage|firestore|pubsub)\b', refactored_code))
+            )
+            
+            # ALWAYS run Gemini validation if:
+            # 1. AWS patterns detected, OR
+            # 2. Multi-service code (Lambda with multiple services), OR
+            # 3. Any suspicious AWS-like patterns
+            if not has_aws_patterns and not is_multi_service:
+                # Final check - only skip if we're 100% certain there are no AWS patterns
+                if not re.search(r'\b(boto3|dynamodb|sqs|sns|lambda_handler|get_object|batch_write|send_message|QueueUrl|TopicArn|s3_client|dynamodb_client|sqs_client|sns_client)\b', refactored_code, re.IGNORECASE):
+                    # No AWS patterns found, return as-is
+                    return refactored_code
             
             # Use Gemini to fix the code - handle multi-service Lambda code
             prompt = f"""You are a code refactoring expert. The following Python code was supposed to be refactored from AWS Lambda (with S3, DynamoDB, SQS, SNS) to Google Cloud Platform, but it still contains AWS patterns mixed with GCP code.
 
-**CRITICAL REQUIREMENTS:**
-1. **Lambda Handler Conversion:**
-   - `def lambda_handler(event, context):` → `def process_gcs_file(data, context):` (for GCS-triggered) OR `@functions_framework.http\ndef function_handler(request):` (for HTTP-triggered)
-   - Remove `event['Records']` loop - GCS background functions receive single file events
+**CRITICAL REQUIREMENTS - ZERO TOLERANCE FOR AWS CODE:**
+1. **Lambda Handler Conversion (MANDATORY):**
+   - `def lambda_handler(event, context):` → `def process_gcs_file(data, context):` (for GCS-triggered)
+   - Remove `event['Records']` loop completely - GCS background functions receive single file events
    - Replace `event['Records'][0]['s3']['bucket']['name']` → `data.get('bucket')`
    - Replace `event['Records'][0]['s3']['object']['key']` → `data.get('name')`
+   - Replace `for record_event in event['Records']:` → Remove loop, process single file directly
 
-2. **S3 to GCS Conversion:**
+2. **S3 to GCS Conversion (MANDATORY):**
    - Remove ALL `boto3.client('s3')` and `boto3.resource('s3')` initialization
+   - Replace `s3_client = storage.Client()` → `storage_client = storage.Client()` (rename variable)
    - Replace `s3_client.get_object(Bucket=bucket_name, Key=object_key)` → `bucket = storage_client.bucket(bucket_name); blob = bucket.blob(object_key); csv_content = blob.download_as_text()`
+   - Replace `response = s3_client.get_object(...)` → Use bucket.blob pattern above
    - Replace `response['Body'].read().decode('utf-8')` → `blob.download_as_text()`
+   - Replace ALL `s3_client.` method calls → Use `storage_client.bucket().blob()` pattern
    - Use `from google.cloud import storage` and `storage_client = storage.Client()`
 
-3. **DynamoDB to Firestore Conversion:**
+3. **DynamoDB to Firestore Conversion (MANDATORY):**
    - Remove ALL `boto3.client('dynamodb')` initialization
-   - Replace `dynamodb_client.batch_write_item(RequestItems={{...}})` → `batch = firestore_db.batch(); batch.set(doc_ref, item); batch.commit()`
-   - Replace DynamoDB item format `{{'S': 'value'}}` → native Python dicts
+   - Replace `dynamodb_client = boto3.client('dynamodb')` → `firestore_db = firestore.Client()`
+   - Replace `dynamodb_client.batch_write_item(RequestItems={{TABLE: [PutRequest: {{Item: ...}}]}})` → `batch = firestore_db.batch(); collection_ref = firestore_db.collection(collection_name); for item in items: doc_ref = collection_ref.document(); batch.set(doc_ref, item); batch.commit()`
+   - Replace DynamoDB item format `{{'S': 'value'}}` → native Python dicts (just `'value'`)
+   - Replace `{{'N': '123'}}` → `123` (integer)
    - Use `from google.cloud import firestore` and `firestore_db = firestore.Client()`
 
-4. **SQS to Pub/Sub Conversion:**
+4. **SQS to Pub/Sub Conversion (MANDATORY):**
    - Remove ALL `boto3.client('sqs')` initialization
-   - Replace `sqs_client.send_message(QueueUrl=url, MessageBody=body)` → `pubsub_publisher.publish(topic_path, json.dumps(body).encode('utf-8'))`
-   - Remove `QueueUrl` parameter - use `topic_path` instead
+   - Replace `sqs_client = boto3.client('sqs')` → `pubsub_publisher = pubsub_v1.PublisherClient()`
+   - Replace `sqs_client.send_message(QueueUrl=url, MessageBody=body)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, json.dumps(body).encode('utf-8'))`
+   - Remove `QueueUrl` parameter completely - use `topic_path` instead
+   - Replace `SQS_DLQ_URL` env var → `PUB_SUB_ERROR_TOPIC` (full path format)
    - Use `from google.cloud import pubsub_v1` and `pubsub_publisher = pubsub_v1.PublisherClient()`
 
-5. **SNS to Pub/Sub Conversion:**
+5. **SNS to Pub/Sub Conversion (MANDATORY):**
    - Remove ALL `boto3.client('sns')` initialization
-   - Replace `sns_client.publish(TopicArn=arn, Message=msg)` → `pubsub_publisher.publish(topic_path, msg.encode('utf-8'))`
+   - Replace `sns_client = boto3.client('sns')` → `pubsub_publisher = pubsub_v1.PublisherClient()` (can reuse same publisher)
+   - Replace `sns_client.publish(TopicArn=arn, Message=msg)` → `import os; topic_path = pubsub_publisher.topic_path(os.getenv('GCP_PROJECT_ID'), os.getenv('GCP_PUBSUB_TOPIC_ID')); future = pubsub_publisher.publish(topic_path, msg.encode('utf-8'))`
+   - Replace `SNS_TOPIC_ARN` env var → `PUB_SUB_SUMMARY_TOPIC` (full path format)
    - Use Pub/Sub topics instead of SNS topics
 
-6. **Environment Variables:**
+6. **Environment Variables (MANDATORY):**
    - Replace `DYNAMODB_TABLE_NAME` → `FIRESTORE_COLLECTION_NAME`
    - Replace `SQS_DLQ_URL` → `PUB_SUB_ERROR_TOPIC` (full path: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
-   - Replace `SNS_TOPIC_ARN` → `PUB_SUB_SUMMARY_TOPIC` (full path)
+   - Replace `SNS_TOPIC_ARN` → `PUB_SUB_SUMMARY_TOPIC` (full path: `projects/{{PROJECT_ID}}/topics/{{TOPIC_NAME}}`)
 
-7. **Exception Handling:**
+7. **Exception Handling (MANDATORY):**
    - Replace `s3_client.exceptions.NoSuchKey` → `from google.cloud.exceptions import NotFound` and catch `NotFound`
    - Remove all `botocore` exception imports
+   - Remove all `boto3` imports
 
-8. **Return ONLY the corrected Python code, no explanations**
+8. **Variable Naming (MANDATORY):**
+   - Replace `s3_client` → `storage_client`
+   - Replace `dynamodb_client` → `firestore_db`
+   - Replace `sqs_client` → `pubsub_publisher`
+   - Replace `sns_client` → `pubsub_publisher`
+
+9. **Return ONLY the corrected Python code, NO explanations, NO markdown, just pure Python code**
 
 **Original AWS Code (for reference):**
 ```python
 {original_code[:3000]}  # First 3000 chars for context
 ```
 
-**Incorrectly Refactored Code (needs fixing):**
+**Incorrectly Refactored Code (needs fixing - contains AWS patterns):**
 ```python
 {refactored_code}
 ```
 
-**Corrected Google Cloud Platform Code:**"""
+**Corrected Google Cloud Platform Code (pure Python, no AWS code):**"""
             
             response = model.generate_content(prompt)
             corrected_code = response.text.strip()
             
-            # Extract code from markdown code blocks if present
+            # Extract code from markdown code blocks if present - be more aggressive
+            # Try multiple extraction patterns
             if '```python' in corrected_code:
-                corrected_code = corrected_code.split('```python')[1].split('```')[0].strip()
+                parts = corrected_code.split('```python')
+                if len(parts) > 1:
+                    corrected_code = parts[1].split('```')[0].strip()
             elif '```' in corrected_code:
-                corrected_code = corrected_code.split('```')[1].split('```')[0].strip()
+                parts = corrected_code.split('```')
+                # Find the largest code block (usually the actual code)
+                code_blocks = []
+                for i in range(1, len(parts), 2):
+                    if i < len(parts):
+                        block = parts[i].strip()
+                        if block and len(block) > 50:  # Reasonable code block size
+                            code_blocks.append(block)
+                if code_blocks:
+                    # Use the largest code block
+                    corrected_code = max(code_blocks, key=len)
+            
+            # Remove any leading/trailing markdown or explanations
+            # Remove lines that start with "Here's" or "Here is" or similar explanations
+            lines = corrected_code.split('\n')
+            cleaned_lines = []
+            code_started = False
+            for line in lines:
+                stripped = line.strip()
+                # Skip explanation lines at the start
+                if not code_started:
+                    if stripped.startswith('Here') or stripped.startswith('The') or stripped.startswith('This'):
+                        continue
+                    if stripped.startswith('import') or stripped.startswith('from') or stripped.startswith('def'):
+                        code_started = True
+                
+                if code_started or stripped:
+                    cleaned_lines.append(line)
+            
+            corrected_code = '\n'.join(cleaned_lines).strip()
+            
+            # Final cleanup: remove any remaining markdown or explanation text
+            # Remove lines that are clearly explanations (not code)
+            lines = corrected_code.split('\n')
+            final_lines = []
+            for line in lines:
+                stripped = line.strip()
+                # Skip lines that are clearly explanations
+                if stripped.startswith('**') or stripped.startswith('*') or stripped.startswith('#'):
+                    # Check if it's a Python comment (starts with #) - keep those
+                    if not stripped.startswith('#'):
+                        continue
+                # Skip lines that are markdown headers
+                if stripped.startswith('##') or stripped.startswith('###'):
+                    continue
+                final_lines.append(line)
+            
+            corrected_code = '\n'.join(final_lines).strip()
             
             logger.info("Gemini validation completed, code corrected")
             return corrected_code
