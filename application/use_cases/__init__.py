@@ -495,8 +495,18 @@ def _transform_code_standalone(
             'llm_guided': False
         }
     
+    # CRITICAL: Run aggressive AWS cleanup FIRST, before transformation
+    if language == 'python' and hasattr(ast_engine, '_aggressive_aws_cleanup'):
+        content = ast_engine._aggressive_aws_cleanup(content)
+    
     # Transform the code (AST engine will use regex patterns, guided by LLM recipe if available)
-    return ast_engine.transform_code(content, language, recipe)
+    transformed_content, variable_mapping = ast_engine.transform_code(content, language, recipe)
+    
+    # CRITICAL: Run aggressive AWS cleanup AGAIN after transformation
+    if language == 'python' and hasattr(ast_engine, '_aggressive_aws_cleanup'):
+        transformed_content = ast_engine._aggressive_aws_cleanup(transformed_content)
+    
+    return transformed_content, variable_mapping
 
 
 class CreateRefactoringPlanUseCase:

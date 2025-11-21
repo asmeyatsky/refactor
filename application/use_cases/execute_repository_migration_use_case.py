@@ -141,11 +141,22 @@ class ExecuteRepositoryMigrationUseCase:
                                 service_type = self._get_aws_service_type(service.service_name)
                                 print(f"  AWS service type: {service_type}")
                                 try:
+                                    # CRITICAL: Run aggressive AWS cleanup BEFORE apply_refactoring
+                                    if language == 'python' and hasattr(self.refactoring_service.ast_engine, '_aggressive_aws_cleanup'):
+                                        refactored_content = self.refactoring_service.ast_engine._aggressive_aws_cleanup(refactored_content)
+                                    
                                     refactored_result = self.refactoring_service.apply_refactoring(
                                         source_code=refactored_content,
                                         language=language,
                                         service_type=service_type
                                     )
+                                    
+                                    # CRITICAL: Run aggressive AWS cleanup AFTER apply_refactoring
+                                    if language == 'python' and hasattr(self.refactoring_service.ast_engine, '_aggressive_aws_cleanup'):
+                                        if isinstance(refactored_result, tuple):
+                                            refactored_result = (self.refactoring_service.ast_engine._aggressive_aws_cleanup(refactored_result[0]), refactored_result[1])
+                                        else:
+                                            refactored_result = self.refactoring_service.ast_engine._aggressive_aws_cleanup(refactored_result)
                                     # Ensure we have a string, not a tuple
                                     if isinstance(refactored_result, tuple):
                                         refactored_content, _ = refactored_result
@@ -201,6 +212,10 @@ class ExecuteRepositoryMigrationUseCase:
                             f"refactored_content must be a string, got {type(refactored_content)}. "
                             f"Value: {str(refactored_content)[:200]}"
                         )
+                    
+                    # CRITICAL: Final AWS cleanup pass before writing
+                    if language == 'python' and hasattr(self.refactoring_service.ast_engine, '_aggressive_aws_cleanup'):
+                        refactored_content = self.refactoring_service.ast_engine._aggressive_aws_cleanup(refactored_content)
                     
                     # Write refactored content if changed
                     if refactored_content != original_content:
@@ -266,6 +281,11 @@ class ExecuteRepositoryMigrationUseCase:
                     try:
                         with open(full_path, 'r', encoding='utf-8') as f:
                             content = f.read()
+                            
+                            # CRITICAL: Final AWS cleanup pass on read content before returning
+                            if language == 'python' and hasattr(self.refactoring_service.ast_engine, '_aggressive_aws_cleanup'):
+                                content = self.refactoring_service.ast_engine._aggressive_aws_cleanup(content)
+                            
                             refactored_files_content[file_path] = content
                             print(f"✅ Read {len(content)} characters from {file_path}")
                     except Exception as e:
