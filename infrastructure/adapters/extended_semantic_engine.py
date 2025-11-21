@@ -2853,6 +2853,17 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Store original code for Gemini validation
         original_code = code
         
+        # CRITICAL FIRST PASS: Catch ALL boto3.client('dynamodb') patterns BEFORE anything else
+        code = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]dynamodb[\'\"][^\)]*\)',
+            r'\1 = firestore.Client()',
+            code,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        code = re.sub(r'\bdynamodb_client\s*=\s*', 'firestore_db = ', code)
+        code = re.sub(r'\bdynamodb_client\.', 'firestore_db.', code)
+        code = re.sub(r'\bdynamodb_client\b', 'firestore_db', code)
+        
         # Replace DynamoDB imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import firestore', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import firestore', code, flags=re.MULTILINE)
@@ -3016,6 +3027,17 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         """Migrate AWS SQS to Google Cloud Pub/Sub"""
         # Store original code for Gemini validation
         original_code = code
+        
+        # CRITICAL FIRST PASS: Catch ALL boto3.client('sqs') patterns BEFORE anything else
+        code = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]sqs[\'\"][^\)]*\)',
+            r'\1 = pubsub_v1.PublisherClient()',
+            code,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        code = re.sub(r'\bsqs_client\s*=\s*', 'pubsub_publisher = ', code)
+        code = re.sub(r'\bsqs_client\.', 'pubsub_publisher.', code)
+        code = re.sub(r'\bsqs_client\b', 'pubsub_publisher', code)
         
         # Replace SQS imports FIRST
         code = re.sub(r'^import boto3\s*$', 'import os\nfrom google.cloud import pubsub_v1', code, flags=re.MULTILINE)
@@ -3192,17 +3214,20 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Store original code for Gemini validation
         original_code = code
         
+        # CRITICAL FIRST PASS: Catch ALL boto3.client('sns') patterns BEFORE anything else
+        code = re.sub(
+            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]sns[\'\"][^\)]*\)',
+            r'\1 = pubsub_v1.PublisherClient()',
+            code,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        code = re.sub(r'\bsns_client\s*=\s*', 'pubsub_publisher = ', code)
+        code = re.sub(r'\bsns_client\.', 'pubsub_publisher.', code)
+        code = re.sub(r'\bsns_client\b', 'pubsub_publisher', code)
+        
         # Replace SNS imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import pubsub_v1', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import pubsub_v1', code, flags=re.MULTILINE)
-        
-        # Replace SNS client instantiation
-        code = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\([\'\"]sns[\'\"].*?\)',
-            r'\1 = pubsub_v1.PublisherClient()',
-            code,
-            flags=re.DOTALL
-        )
         
         # Replace SNS publish -> Pub/Sub publish
         code = re.sub(
