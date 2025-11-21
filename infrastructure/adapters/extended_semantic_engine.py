@@ -48,9 +48,19 @@ class ExtendedASTTransformationEngine:
         transformer = self.transformers[language]
         transformed_code = transformer.transform(code, transformation_recipe)
         
+        # CRITICAL: Run aggressive AWS cleanup AGAIN after transformation
+        # This catches any AWS patterns that were reintroduced during transformation
+        if language == 'python':
+            transformed_code = self._aggressive_aws_cleanup(transformed_code)
+        
         # Validate syntax for Python code
         if language == 'python':
             transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
+        
+        # CRITICAL: Run aggressive AWS cleanup ONE MORE TIME after syntax validation
+        # This is the final safety net
+        if language == 'python':
+            transformed_code = self._aggressive_aws_cleanup(transformed_code)
         
         # Get variable mapping if available
         variable_mapping = {}
@@ -67,33 +77,55 @@ class ExtendedASTTransformationEngine:
         """
         result = code
         
-        # STEP 1: Replace ALL boto3.client() calls FIRST
+        # STEP 1: Replace ALL boto3.client() calls FIRST - be EXTREMELY aggressive
+        # Match ANY whitespace, any quotes, any parameters
         result = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]dynamodb[\'\"][^\)]*\)',
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]dynamodb[\'\"][^\)]*\)',
             r'\1 = firestore.Client()',
             result,
             flags=re.DOTALL | re.IGNORECASE
         )
         result = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]sqs[\'\"][^\)]*\)',
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]sqs[\'\"][^\)]*\)',
             r'\1 = pubsub_v1.PublisherClient()',
             result,
             flags=re.DOTALL | re.IGNORECASE
         )
         result = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]sns[\'\"][^\)]*\)',
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]sns[\'\"][^\)]*\)',
             r'\1 = pubsub_v1.PublisherClient()',
             result,
             flags=re.DOTALL | re.IGNORECASE
         )
         result = re.sub(
-            r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]s3[\'\"][^\)]*\)',
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]s3[\'\"][^\)]*\)',
             r'\1 = storage.Client()',
             result,
             flags=re.DOTALL | re.IGNORECASE
         )
         
+        # STEP 1.5: Also catch boto3.client() without variable assignment
+        result = re.sub(
+            r'boto3\s*\.\s*client\s*\(\s*[\'\"]dynamodb[\'\"][^\)]*\)',
+            r'firestore.Client()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'boto3\s*\.\s*client\s*\(\s*[\'\"]sqs[\'\"][^\)]*\)',
+            r'pubsub_v1.PublisherClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'boto3\s*\.\s*client\s*\(\s*[\'\"]sns[\'\"][^\)]*\)',
+            r'pubsub_v1.PublisherClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
         # STEP 2: Fix variable names IMMEDIATELY after client replacement
+        # Be aggressive - replace ALL occurrences
         result = re.sub(r'\bdynamodb_client\b', 'firestore_db', result)
         result = re.sub(r'\bsqs_client\b', 'pubsub_publisher', result)
         result = re.sub(r'\bsns_client\b', 'pubsub_publisher', result)
@@ -3773,6 +3805,10 @@ class ExtendedSemanticRefactoringService:
         """
         Apply refactoring to the source code for the specified service type
         """
+        # CRITICAL: Run aggressive AWS cleanup FIRST, before any processing
+        if language == 'python':
+            source_code = self.ast_engine._aggressive_aws_cleanup(source_code)
+        
         # If target API is not specified, infer it from the service type
         if not target_api:
             if service_type == 's3_to_gcs':
@@ -3808,6 +3844,10 @@ class ExtendedSemanticRefactoringService:
             transformed_code, variable_mapping = result
         else:
             transformed_code = result
+        
+        # CRITICAL: Run aggressive AWS cleanup AGAIN after transformation
+        if language == 'python':
+            transformed_code = self.ast_engine._aggressive_aws_cleanup(transformed_code)
         
         return transformed_code
     
