@@ -255,52 +255,82 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
         transformed_files = 0
         service_results = {}
         all_variable_mappings = {}  # Collect variable mappings from all tasks
-
+        
+        # Optimize: Group tasks by file to enable parallel processing of independent files
+        tasks_by_file = {}
         for task in plan.get_pending_tasks():
+            file_path = str(task.file_path)
+            if file_path not in tasks_by_file:
+                tasks_by_file[file_path] = []
+            tasks_by_file[file_path].append(task)
+        
+        # Process files (can be parallelized in future)
+        for file_path, file_tasks in tasks_by_file.items():
+            # Read file once for all tasks on this file
             try:
-                # Mark task as in progress
-                plan = self.plan_repo.load(plan_id)  # Refresh plan state
-                plan = plan.mark_task_in_progress(task.id)
-                self.plan_repo.save(plan)
-
-                # Identify service type from operation
-                service_type = self._get_service_type_from_operation(task.operation)
-
-                # Execute the refactoring task based on service type
-                if task.operation != "no_op":  # Skip no-op tasks
-                    transformed_content, variable_mapping = self._execute_service_refactoring(codebase, task, service_type)
-                    
-                    # Collect variable mapping for summary
-                    if variable_mapping and isinstance(variable_mapping, dict):
-                        all_variable_mappings.update(variable_mapping)
-
-                    # Write the transformed content back to the file
-                    self.file_repo.write_file(task.file_path, transformed_content)
-                    transformed_files += 1
-
-                    # Update service results
-                    if service_type not in service_results:
-                        service_results[service_type] = {'success': 0, 'failed': 0}
-                    service_results[service_type]['success'] += 1
-
-                # Mark task as completed
-                plan = self.plan_repo.load(plan_id)  # Refresh plan state
-                plan = plan.mark_task_completed(task.id)
-                self.plan_repo.save(plan)
-
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_content = f.read()
             except Exception as e:
-                # Mark task as failed
-                plan = self.plan_repo.load(plan_id)  # Refresh plan state
-                plan = plan.mark_task_failed(task.id, str(e))
-                self.plan_repo.save(plan)
-                errors.append(f"Task {task.id} failed: {str(e)}")
+                errors.append(f"Failed to read file {file_path}: {str(e)}")
+                # Mark all tasks for this file as failed
+                for task in file_tasks:
+                    plan = self.plan_repo.load(plan_id)
+                    plan = plan.mark_task_failed(task.id, f"Failed to read file: {str(e)}")
+                    self.plan_repo.save(plan)
+                continue
+            
+            # Process all tasks for this file sequentially (they may depend on each other)
+            transformed_content = file_content
+            for task in file_tasks:
+                try:
+                    # Mark task as in progress
+                    plan = self.plan_repo.load(plan_id)  # Refresh plan state
+                    plan = plan.mark_task_in_progress(task.id)
+                    self.plan_repo.save(plan)
 
-                # Update service results for failure
-                service_type = self._get_service_type_from_operation(task.operation)
-                if service_type:
-                    if service_type not in service_results:
-                        service_results[service_type] = {'success': 0, 'failed': 0}
-                    service_results[service_type]['failed'] += 1
+                    # Identify service type from operation
+                    service_type = self._get_service_type_from_operation(task.operation)
+
+                    # Execute the refactoring task based on service type
+                    if task.operation != "no_op":  # Skip no-op tasks
+                        transformed_content, variable_mapping = self._execute_service_refactoring(
+                            codebase, task, service_type, transformed_content
+                        )
+                        
+                        # Collect variable mapping for summary
+                        if variable_mapping and isinstance(variable_mapping, dict):
+                            all_variable_mappings.update(variable_mapping)
+
+                        # Update service results
+                        if service_type not in service_results:
+                            service_results[service_type] = {'success': 0, 'failed': 0}
+                        service_results[service_type]['success'] += 1
+
+                    # Mark task as completed
+                    plan = self.plan_repo.load(plan_id)  # Refresh plan state
+                    plan = plan.mark_task_completed(task.id)
+                    self.plan_repo.save(plan)
+
+                except Exception as e:
+                    # Mark task as failed
+                    plan = self.plan_repo.load(plan_id)  # Refresh plan state
+                    plan = plan.mark_task_failed(task.id, str(e))
+                    self.plan_repo.save(plan)
+                    errors.append(f"Task {task.id} failed: {str(e)}")
+
+                    # Update service results for failure
+                    service_type = self._get_service_type_from_operation(task.operation)
+                    if service_type:
+                        if service_type not in service_results:
+                            service_results[service_type] = {'success': 0, 'failed': 0}
+                        service_results[service_type]['failed'] += 1
+            
+            # Write transformed content once after all tasks for this file
+            try:
+                self.file_repo.write_file(file_path, transformed_content)
+                transformed_files += 1
+            except Exception as e:
+                errors.append(f"Failed to write file {file_path}: {str(e)}")
 
         # After all tasks are complete, run tests to verify behavior preservation
         test_results = self.test_runner.run_tests(codebase)
@@ -383,8 +413,14 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
         else:
             return 'unknown'
 
-    def _execute_service_refactoring(self, codebase: Codebase, task: RefactoringTask, service_type: str) -> tuple[str, dict]:
+    def _execute_service_refactoring(self, codebase: Codebase, task: RefactoringTask, service_type: str, content: Optional[str] = None) -> tuple[str, dict]:
         """Execute refactoring for a specific service type
+        
+        Args:
+            codebase: The codebase entity
+            task: The refactoring task
+            service_type: The service type to transform
+            content: Optional pre-read file content (for optimization)
         
         Returns:
             tuple: (transformed_content, variable_mapping)
@@ -398,9 +434,12 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
         lang_value = codebase.language.value
         llm_provider_ref = self.llm_provider
         
-        # Read file content
-        with open(file_path_str, 'r', encoding='utf-8') as f:
-            original_content_str = f.read()
+        # Use provided content or read file content
+        if content is not None:
+            original_content_str = content
+        else:
+            with open(file_path_str, 'r', encoding='utf-8') as f:
+                original_content_str = f.read()
         
         # Now task is no longer needed - ensure it's out of scope
         # by calling a standalone function that doesn't have task in scope

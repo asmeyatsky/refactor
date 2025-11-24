@@ -308,6 +308,154 @@ const MigrationResults = ({ result, inputMethod, cloudProvider, onReset }) => {
         </Accordion>
       )}
 
+      {/* Validation Results */}
+      {result.validation && (
+        <Accordion defaultExpanded sx={{ mb: 2 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+              <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                Validation Results
+              </Typography>
+              {result.validation.is_valid ? (
+                <Chip label="Valid" color="success" size="small" sx={{ mr: 1 }} />
+              ) : (
+                <Chip label="Issues Found" color="error" size="small" sx={{ mr: 1 }} />
+              )}
+            </Box>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Box>
+              {result.validation.errors && result.validation.errors.length > 0 && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>Validation Errors:</Typography>
+                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                    {result.validation.errors.map((error, idx) => (
+                      <li key={idx}>{error}</li>
+                    ))}
+                  </Box>
+                </Alert>
+              )}
+              
+              {result.validation.warnings && result.validation.warnings.length > 0 && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>Warnings:</Typography>
+                  <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                    {result.validation.warnings.map((warning, idx) => (
+                      <li key={idx}>{warning}</li>
+                    ))}
+                  </Box>
+                </Alert>
+              )}
+              
+              {result.validation.aws_patterns_found && result.validation.aws_patterns_found.length > 0 && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>AWS Patterns Found:</Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+                    {result.validation.aws_patterns_found.map((pattern, idx) => (
+                      <Chip key={idx} label={pattern} size="small" variant="outlined" />
+                    ))}
+                  </Box>
+                </Alert>
+              )}
+              
+              {result.validation.azure_patterns_found && result.validation.azure_patterns_found.length > 0 && (
+                <Alert severity="warning" sx={{ mb: 2 }}>
+                  <Typography variant="subtitle2" gutterBottom>Azure Patterns Found:</Typography>
+                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
+                    {result.validation.azure_patterns_found.map((pattern, idx) => (
+                      <Chip key={idx} label={pattern} size="small" variant="outlined" />
+                    ))}
+                  </Box>
+                </Alert>
+              )}
+              
+              {result.validation.syntax_valid && result.validation.gcp_api_correct && 
+               (!result.validation.errors || result.validation.errors.length === 0) && (
+                <Alert severity="success">
+                  <Typography variant="body2">
+                    ✅ Code is valid for Google Cloud Platform. Syntax is correct and GCP APIs are properly used.
+                  </Typography>
+                </Alert>
+              )}
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+      )}
+      
+      {/* File-level validation results for repository migrations */}
+      {inputMethod === 'repository' && result.validation && typeof result.validation === 'object' && 
+       Object.keys(result.validation).some(key => key !== 'is_valid' && key !== 'errors' && key !== 'warnings') && (
+        <Accordion sx={{ mb: 2 }}>
+          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+            <Typography variant="h6">
+              File-Level Validation Results
+            </Typography>
+          </AccordionSummary>
+          <AccordionDetails>
+            <Box>
+              {Object.entries(result.validation)
+                .filter(([key]) => key !== 'is_valid' && key !== 'errors' && key !== 'warnings')
+                .map(([filePath, validation]) => (
+                  <Accordion key={filePath} sx={{ mb: 1 }}>
+                    <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                      <Box sx={{ display: 'flex', alignItems: 'center', width: '100%' }}>
+                        <Typography variant="subtitle1" sx={{ flexGrow: 1, fontFamily: 'monospace' }}>
+                          {filePath}
+                        </Typography>
+                        {validation.is_valid ? (
+                          <Chip label="Valid" color="success" size="small" sx={{ mr: 1 }} />
+                        ) : (
+                          <Chip label="Issues" color="error" size="small" sx={{ mr: 1 }} />
+                        )}
+                      </Box>
+                    </AccordionSummary>
+                    <AccordionDetails>
+                      {validation.errors && validation.errors.length > 0 && (
+                        <Alert severity="error" sx={{ mb: 1 }}>
+                          <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                            {validation.errors.map((error, idx) => (
+                              <li key={idx}>{error}</li>
+                            ))}
+                          </Box>
+                        </Alert>
+                      )}
+                      {validation.warnings && validation.warnings.length > 0 && (
+                        <Alert severity="warning" sx={{ mb: 1 }}>
+                          <Box component="ul" sx={{ m: 0, pl: 2 }}>
+                            {validation.warnings.map((warning, idx) => (
+                              <li key={idx}>{warning}</li>
+                            ))}
+                          </Box>
+                        </Alert>
+                      )}
+                      {validation.aws_patterns_found && validation.aws_patterns_found.length > 0 && (
+                        <Box sx={{ mb: 1 }}>
+                          <Typography variant="caption" color="text.secondary">AWS Patterns:</Typography>
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                            {validation.aws_patterns_found.map((pattern, idx) => (
+                              <Chip key={idx} label={pattern} size="small" variant="outlined" />
+                            ))}
+                          </Box>
+                        </Box>
+                      )}
+                      {validation.azure_patterns_found && validation.azure_patterns_found.length > 0 && (
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">Azure Patterns:</Typography>
+                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
+                            {validation.azure_patterns_found.map((pattern, idx) => (
+                              <Chip key={idx} label={pattern} size="small" variant="outlined" />
+                            ))}
+                          </Box>
+                        </Box>
+                      )}
+                    </AccordionDetails>
+                  </Accordion>
+                ))}
+            </Box>
+          </AccordionDetails>
+        </Accordion>
+      )}
+
       {result.variable_mapping && Object.keys(result.variable_mapping).length > 0 && (
         <Accordion sx={{ mb: 2 }}>
           <AccordionSummary expandIcon={<ExpandMoreIcon />}>

@@ -17,7 +17,8 @@ import {
   Chip,
   Fade,
   Zoom,
-  Slide
+  Slide,
+  LinearProgress
 } from '@mui/material';
 import {
   CloudUpload as CloudUploadIcon,
@@ -75,9 +76,14 @@ const App = () => {
   const [selectedServices, setSelectedServices] = useState([]);
   const [language, setLanguage] = useState('python');
   const [migrationResult, setMigrationResult] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [analyzing, setAnalyzing] = useState(false); // Loading state for analysis
+  const [migrating, setMigrating] = useState(false); // Loading state for migration/refactoring
   const [error, setError] = useState(null);
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [progress, setProgress] = useState({
+    refactoring: { progress: 0.0, message: "Waiting..." },
+    validation: { progress: 0.0, message: "Waiting..." }
+  });
   
   // Refs to store interval and timeout IDs for cleanup
   const pollIntervalRef = useRef(null);
@@ -147,7 +153,12 @@ const App = () => {
     setMigrationResult(null);
     setError(null);
     setAnalysisResult(null);
-    setLoading(false);
+    setAnalyzing(false);
+    setMigrating(false);
+    setProgress({
+      refactoring: { progress: 0.0, message: "Waiting..." },
+      validation: { progress: 0.0, message: "Waiting..." }
+    });
   };
 
   const handleAnalyzeRepository = async () => {
@@ -156,7 +167,7 @@ const App = () => {
       return;
     }
 
-    setLoading(true);
+    setAnalyzing(true);
     setError(null);
 
     try {
@@ -170,7 +181,7 @@ const App = () => {
     } catch (err) {
       setError(err.message || 'Failed to analyze repository');
     } finally {
-      setLoading(false);
+      setAnalyzing(false);
     }
   };
 
@@ -185,7 +196,7 @@ const App = () => {
       timeoutRef.current = null;
     }
     
-    setLoading(true);
+    setMigrating(true);
     setError(null);
     setMigrationResult(null);
 
@@ -208,6 +219,11 @@ const App = () => {
             try {
               const statusResponse = await getMigrationStatus(migrationId);
               
+              // Update progress if available
+              if (statusResponse.progress) {
+                setProgress(statusResponse.progress);
+              }
+              
               if (statusResponse.status === 'completed') {
                 // Cleanup
                 if (pollIntervalRef.current) {
@@ -228,7 +244,7 @@ const App = () => {
                 };
                 setMigrationResult(finalResult);
                 setActiveStep(3);
-                setLoading(false);
+                setMigrating(false);
               } else if (statusResponse.status === 'failed') {
                 // Cleanup
                 if (pollIntervalRef.current) {
@@ -240,7 +256,7 @@ const App = () => {
                   timeoutRef.current = null;
                 }
                 setError(statusResponse.result?.error || 'Refactoring failed');
-                setLoading(false);
+                setMigrating(false);
               }
               // If still pending or in_progress, continue polling
             } catch (pollError) {
@@ -256,32 +272,109 @@ const App = () => {
               pollIntervalRef.current = null;
             }
             setError('Refactoring timeout - please check the refactoring status manually');
-            setLoading(false);
+            setMigrating(false);
           }, 300000); // 5 minutes
         } else {
           // Fallback if no migration_id
           setMigrationResult(initialResponse);
           setActiveStep(3);
-          setLoading(false);
+          setMigrating(false);
         }
       } else {
-        // Repository migration
+        // Repository migration - now uses async polling like code snippet migration
         if (!analysisResult || !analysisResult.repository_id) {
           setError('Please analyze the repository first');
-          setLoading(false);
+          setMigrating(false);
           return;
         }
-        result = await migrateRepository({
+        
+        // Start migration and get migration_id
+        const initialResponse = await migrateRepository({
           repositoryId: analysisResult.repository_id,
           services: selectedServices,
           createPR: false
         });
-        console.log('App.js - Migration result received:', result);
-        console.log('App.js - refactored_files:', result?.refactored_files);
-        console.log('App.js - files_changed:', result?.files_changed);
-        setMigrationResult(result);
-        setActiveStep(3);
-        setLoading(false);
+        
+        // Check if we got a migration_id (async) or direct result (sync fallback)
+        const migrationId = initialResponse.migration_id;
+        if (migrationId) {
+          // Poll for completion
+          pollIntervalRef.current = setInterval(async () => {
+            try {
+              const statusResponse = await getMigrationStatus(migrationId);
+              
+              // Update progress if available
+              if (statusResponse.progress) {
+                setProgress(statusResponse.progress);
+              }
+              
+              if (statusResponse.status === 'completed') {
+                // Cleanup
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                if (timeoutRef.current) {
+                  clearTimeout(timeoutRef.current);
+                  timeoutRef.current = null;
+                }
+                // Format result for repository migration
+                const finalResult = {
+                  success: statusResponse.success !== false,
+                  repository_id: statusResponse.repository_id || analysisResult.repository_id,
+                  files_changed: statusResponse.files_changed || [],
+                  files_failed: statusResponse.files_failed || [],
+                  total_files_changed: statusResponse.total_files_changed || 0,
+                  total_files_failed: statusResponse.total_files_failed || 0,
+                  test_results: statusResponse.test_results,
+                  pr_url: statusResponse.pr_url,
+                  refactored_files: statusResponse.refactored_files || {},
+                  error: statusResponse.error,
+                  migration_id: migrationId,
+                  ...statusResponse.result
+                };
+                console.log('App.js - Repository migration result received:', finalResult);
+                console.log('App.js - refactored_files:', finalResult?.refactored_files);
+                console.log('App.js - files_changed:', finalResult?.files_changed);
+                setMigrationResult(finalResult);
+                setActiveStep(3);
+                setMigrating(false);
+              } else if (statusResponse.status === 'failed') {
+                // Cleanup
+                if (pollIntervalRef.current) {
+                  clearInterval(pollIntervalRef.current);
+                  pollIntervalRef.current = null;
+                }
+                if (timeoutRef.current) {
+                  clearTimeout(timeoutRef.current);
+                  timeoutRef.current = null;
+                }
+                setError(statusResponse.error || statusResponse.result?.error || 'Repository migration failed');
+                setMigrating(false);
+              }
+              // If still pending or in_progress, continue polling
+            } catch (pollError) {
+              console.error('Polling error:', pollError);
+              // Continue polling on error
+            }
+          }, 2000); // Poll every 2 seconds for repository migrations (slower than code snippets)
+          
+          // Set timeout after 30 minutes (1800 seconds) for repository migrations
+          timeoutRef.current = setTimeout(() => {
+            if (pollIntervalRef.current) {
+              clearInterval(pollIntervalRef.current);
+              pollIntervalRef.current = null;
+            }
+            setError('Repository migration timeout - this can take a very long time with many services. Please check the migration status manually or try with fewer services.');
+            setMigrating(false);
+          }, 1800000); // 30 minutes
+        } else {
+          // Fallback if no migration_id (sync response)
+          console.log('App.js - Migration result received (sync):', initialResponse);
+          setMigrationResult(initialResponse);
+          setActiveStep(3);
+          setMigrating(false);
+        }
       }
     } catch (err) {
       // Cleanup on error
@@ -294,7 +387,7 @@ const App = () => {
         timeoutRef.current = null;
       }
       setError(err.message || 'Refactoring failed');
-      setLoading(false);
+      setMigrating(false);
     }
   };
 
@@ -328,20 +421,25 @@ const App = () => {
             />
           );
         } else {
-          return (
-            <RepositoryInput
-              repositoryUrl={repositoryUrl}
-              branch={repositoryBranch}
-              onUrlChange={setRepositoryUrl}
-              onBranchChange={setRepositoryBranch}
-              onAnalyze={handleAnalyzeRepository}
-              analysisResult={analysisResult}
-              loading={loading}
-              cloudProvider={cloudProvider}
-              selectedServices={selectedServices}
-              onServicesChange={setSelectedServices}
-            />
-          );
+            return (
+              <RepositoryInput
+                repositoryUrl={repositoryUrl}
+                branch={repositoryBranch}
+                onUrlChange={setRepositoryUrl}
+                onBranchChange={setRepositoryBranch}
+                onAnalyze={handleAnalyzeRepository}
+                analysisResult={analysisResult}
+                loading={analyzing}
+                cloudProvider={cloudProvider}
+                selectedServices={selectedServices}
+                onServicesChange={setSelectedServices}
+                onClearAnalysis={() => {
+                  setAnalysisResult(null);
+                  setSelectedServices([]);
+                  setError(null);
+                }}
+              />
+            );
         }
       case 3:
         return (
@@ -428,6 +526,61 @@ const App = () => {
 
                 <Box sx={{ minHeight: 400 }}>
                   {renderStepContent()}
+                  
+                  {/* Show progress bars when migrating */}
+                  {migrating && (
+                    <Box sx={{ mt: 3 }}>
+                      <Paper elevation={2} sx={{ p: 3, bgcolor: 'background.paper' }}>
+                        <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
+                          Refactoring Progress
+                        </Typography>
+                        
+                        {/* Refactoring Progress */}
+                        <Box sx={{ mb: 3 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                            <Typography variant="body2" color="text.secondary">
+                              Refactoring Agent
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {Math.round(progress.refactoring.progress)}%
+                            </Typography>
+                          </Box>
+                          <LinearProgress 
+                            variant="determinate" 
+                            value={progress.refactoring.progress} 
+                            sx={{ height: 8, borderRadius: 4 }}
+                            color="primary"
+                          />
+                          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                            {progress.refactoring.message}
+                          </Typography>
+                        </Box>
+                        
+                        {/* Validation Progress */}
+                        {progress.validation.progress > 0 && (
+                          <Box>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                              <Typography variant="body2" color="text.secondary">
+                                Validation Agent
+                              </Typography>
+                              <Typography variant="body2" color="text.secondary">
+                                {Math.round(progress.validation.progress)}%
+                              </Typography>
+                            </Box>
+                            <LinearProgress 
+                              variant="determinate" 
+                              value={progress.validation.progress} 
+                              sx={{ height: 8, borderRadius: 4 }}
+                              color="secondary"
+                            />
+                            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                              {progress.validation.message}
+                            </Typography>
+                          </Box>
+                        )}
+                      </Paper>
+                    </Box>
+                  )}
                 </Box>
 
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', mt: 4 }}>
@@ -452,12 +605,12 @@ const App = () => {
                       <Button
                         variant="contained"
                         onClick={handleMigrate}
-                        disabled={loading || (inputMethod === 'code' && !codeSnippet.trim()) || 
+                        disabled={migrating || analyzing || (inputMethod === 'code' && !codeSnippet.trim()) || 
                                  (inputMethod === 'repository' && (!repositoryUrl.trim() || !analysisResult))}
-                        startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <CloudUploadIcon />}
+                        startIcon={migrating ? <CircularProgress size={20} color="inherit" /> : <CloudUploadIcon />}
                         sx={{ minWidth: 150 }}
                       >
-                        {loading ? 'Refactoring...' : 'Start Refactoring'}
+                        {migrating ? 'Refactoring...' : 'Start Refactoring'}
                       </Button>
                     ) : (
                       <Button

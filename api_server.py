@@ -50,6 +50,9 @@ app.add_middleware(
 # In-memory storage for migration jobs (in production, use a database)
 migration_jobs = {}
 
+# Progress tracking for jobs
+job_progress = {}
+
 class MigrateRequest(BaseModel):
     code: str
     language: str
@@ -109,6 +112,12 @@ async def migrate_code(request: MigrateRequest, background_tasks: BackgroundTask
         "result": None
     }
     
+    # Initialize progress tracking
+    job_progress[migration_id] = {
+        "refactoring": {"progress": 0.0, "message": "Initializing..."},
+        "validation": {"progress": 0.0, "message": "Waiting..."}
+    }
+    
     # Start migration in background
     background_tasks.add_task(execute_migration, migration_id, request, temp_file_path)
     
@@ -122,7 +131,7 @@ async def migrate_code(request: MigrateRequest, background_tasks: BackgroundTask
 
 @app.get("/api/migration/{migration_id}")
 def get_migration_status(migration_id: str):
-    """Get the status of a migration job"""
+    """Get the status of a migration job (supports both code snippet and repository migrations)"""
     job = migration_jobs.get(migration_id)
     if not job:
         raise HTTPException(status_code=404, detail="Migration job not found")
@@ -132,63 +141,113 @@ def get_migration_status(migration_id: str):
         "status": job["status"],
         "created_at": job["created_at"],
         "result": job["result"],
-        "code": job["request"].code  # Include original code for reference
+        "progress": job_progress.get(migration_id, {
+            "refactoring": {"progress": 0.0, "message": "Initializing..."},
+            "validation": {"progress": 0.0, "message": "Waiting..."}
+        })
     }
     
-    # If migration completed, include refactored code and variable mapping if available
-    if job["status"] == "completed" and job["result"]:
-        result = job["result"]
-        if isinstance(result, dict):
-            # Try to extract refactored code from result - prioritize top level
-            if "refactored_code" in result:
-                response["refactored_code"] = result["refactored_code"]
-            elif "execution_result" in result and isinstance(result["execution_result"], dict):
-                if "refactored_code" in result["execution_result"]:
-                    response["refactored_code"] = result["execution_result"]["refactored_code"]
-            elif "transformed_files" in result:
-                # If we have transformed files info, try to read the refactored code
-                try:
-                    temp_file_path = job.get("temp_file_path", "")
-                    if temp_file_path:
-                        temp_dir = Path(temp_file_path).parent
-                        codebase_path = temp_dir / "codebase"
-                        lang_ext_map = {'python': 'py', 'java': 'java'}
-                        file_ext = lang_ext_map.get(job['request'].language, 'py')
-                        code_file = codebase_path / f"code.{file_ext}"
-                        if code_file.exists():
-                            with open(code_file, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                # CRITICAL: Final AWS cleanup pass before returning
-                                if job['request'].language == 'python':
-                                    from infrastructure.adapters.extended_semantic_engine import ExtendedASTTransformationEngine
-                                    ast_engine = ExtendedASTTransformationEngine()
-                                    if hasattr(ast_engine, '_aggressive_aws_cleanup'):
-                                        content = ast_engine._aggressive_aws_cleanup(content)
-                                response["refactored_code"] = content
-                except Exception as e:
-                    print(f"Warning: Could not read refactored code from file: {e}")
-            
-            # Extract variable mapping if available - prioritize top level
-            if "variable_mapping" in result:
-                response["variable_mapping"] = result["variable_mapping"]
-            elif "execution_result" in result and isinstance(result["execution_result"], dict):
-                if "variable_mapping" in result["execution_result"]:
-                    response["variable_mapping"] = result["execution_result"]["variable_mapping"]
-            
-            # Also include success flag if available
-            if "success" in result:
-                response["success"] = result["success"]
-            else:
-                response["success"] = True  # If completed, assume success unless error present
+    # Handle code snippet migrations
+    if "request" in job and hasattr(job["request"], "code"):
+        response["code"] = job["request"].code  # Include original code for reference
+        
+        # If migration completed, include refactored code and variable mapping if available
+        if job["status"] == "completed" and job["result"]:
+            result = job["result"]
+            if isinstance(result, dict):
+                # Try to extract refactored code from result - prioritize top level
+                if "refactored_code" in result:
+                    response["refactored_code"] = result["refactored_code"]
+                elif "execution_result" in result and isinstance(result["execution_result"], dict):
+                    if "refactored_code" in result["execution_result"]:
+                        response["refactored_code"] = result["execution_result"]["refactored_code"]
+                elif "transformed_files" in result:
+                    # If we have transformed files info, try to read the refactored code
+                    try:
+                        temp_file_path = job.get("temp_file_path", "")
+                        if temp_file_path:
+                            temp_dir = Path(temp_file_path).parent
+                            codebase_path = temp_dir / "codebase"
+                            lang_ext_map = {'python': 'py', 'java': 'java'}
+                            file_ext = lang_ext_map.get(job['request'].language, 'py')
+                            code_file = codebase_path / f"code.{file_ext}"
+                            if code_file.exists():
+                                with open(code_file, 'r', encoding='utf-8') as f:
+                                    content = f.read()
+                                    # CRITICAL: Final AWS cleanup pass before returning
+                                    if job['request'].language == 'python':
+                                        from infrastructure.adapters.extended_semantic_engine import ExtendedASTTransformationEngine
+                                        ast_engine = ExtendedASTTransformationEngine()
+                                        if hasattr(ast_engine, '_aggressive_aws_cleanup'):
+                                            content = ast_engine._aggressive_aws_cleanup(content)
+                                    response["refactored_code"] = content
+                    except Exception as e:
+                        print(f"Warning: Could not read refactored code from file: {e}")
+                
+                # Extract variable mapping if available - prioritize top level
+                if "variable_mapping" in result:
+                    response["variable_mapping"] = result["variable_mapping"]
+                elif "execution_result" in result and isinstance(result["execution_result"], dict):
+                    if "variable_mapping" in result["execution_result"]:
+                        response["variable_mapping"] = result["execution_result"]["variable_mapping"]
+                
+                # Also include success flag if available
+                if "success" in result:
+                    response["success"] = result["success"]
+                else:
+                    response["success"] = True  # If completed, assume success unless error present
+    
+    # Handle repository migrations
+    elif "repository_id" in job:
+        response["repository_id"] = job["repository_id"]
+        
+        # If migration completed, include all repository migration results
+        if job["status"] == "completed" and job["result"]:
+            result = job["result"]
+            if isinstance(result, dict):
+                # Include all repository migration fields
+                response.update({
+                    "success": result.get("success", True),
+                    "files_changed": result.get("files_changed", []),
+                    "files_failed": result.get("files_failed", []),
+                    "total_files_changed": result.get("total_files_changed", 0),
+                    "total_files_failed": result.get("total_files_failed", 0),
+                    "test_results": result.get("test_results"),
+                    "pr_url": result.get("pr_url"),
+                    "refactored_files": result.get("refactored_files", {}),
+                    "error": result.get("error")
+                })
+        elif job["status"] == "failed" and job["result"]:
+            result = job["result"]
+            if isinstance(result, dict):
+                response["error"] = result.get("error", "Migration failed")
+                response["success"] = False
     
     return response
 
 
 def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path: str):
-    """Execute the migration in the background"""
+    """Execute the migration in the background with progress tracking"""
     try:
         # Update status to in progress
         migration_jobs[migration_id]["status"] = "in_progress"
+        
+        # Update progress
+        def update_refactoring_progress(message: str, progress: float):
+            if migration_id in job_progress:
+                job_progress[migration_id]["refactoring"] = {
+                    "progress": progress,
+                    "message": message
+                }
+        
+        def update_validation_progress(message: str, progress: float):
+            if migration_id in job_progress:
+                job_progress[migration_id]["validation"] = {
+                    "progress": progress,
+                    "message": message
+                }
+        
+        update_refactoring_progress("Starting refactoring...", 5.0)
         
         # Map language string to enum
         language_map = {
@@ -214,12 +273,16 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         shutil.copy2(temp_file_path, target_file)
         
         # Create orchestrator and execute migration
+        update_refactoring_progress("Creating migration orchestrator...", 10.0)
         orchestrator = create_multi_service_migration_system()
+        
+        update_refactoring_progress(f"Refactoring {len(request.services)} service(s)...", 20.0)
         result = orchestrator.execute_migration(
             str(codebase_path),
             language,
             services_to_migrate=request.services
         )
+        update_refactoring_progress("Refactoring complete", 90.0)
         
         # Read the refactored code from the file AFTER transformation completes
         refactored_code = None
@@ -248,6 +311,32 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         else:
             # Fallback to original code if transformation didn't happen or file can't be read
             result["refactored_code"] = request.code
+        
+        # Validate the refactored code
+        update_refactoring_progress("Refactoring complete", 100.0)
+        update_validation_progress("Starting validation...", 0.0)
+        
+        from application.use_cases.validate_gcp_code_use_case import ValidateGCPCodeUseCase
+        
+        validator = ValidateGCPCodeUseCase()
+        validation_result = validator.validate(
+            refactored_code,
+            language=request.language,
+            progress_callback=lambda msg, pct: update_validation_progress(msg, pct)
+        )
+        
+        # Add validation results to response
+        result["validation"] = {
+            "is_valid": validation_result.is_valid,
+            "errors": validation_result.errors,
+            "warnings": validation_result.warnings,
+            "aws_patterns_found": validation_result.aws_patterns_found,
+            "azure_patterns_found": validation_result.azure_patterns_found,
+            "syntax_valid": validation_result.syntax_valid,
+            "gcp_api_correct": validation_result.gcp_api_correct
+        }
+        
+        update_validation_progress("Validation complete", 100.0)
         
         # Extract variable mapping from result if available
         variable_mapping = {}
@@ -424,12 +513,11 @@ async def analyze_repository_endpoint(request: AnalyzeRepositoryRequest):
         raise HTTPException(status_code=status_code, detail=detail_msg)
 
 
-@app.post("/api/repository/{repository_id}/migrate")
-async def migrate_repository_endpoint(repository_id: str, request: MigrateRepositoryRequest):
-    """Execute repository migration"""
+@app.post("/api/repository/{repository_id}/migrate", response_model=MigrateResponse)
+async def migrate_repository_endpoint(repository_id: str, request: MigrateRepositoryRequest, background_tasks: BackgroundTasks):
+    """Initiate a repository migration process (async)"""
     try:
         from infrastructure.repositories.repository_repository import RepositoryRepositoryAdapter
-        from infrastructure.adapters.mar_generator import MARGenerator
         
         repo_repo = RepositoryRepositoryAdapter()
         repository = repo_repo.load(repository_id)
@@ -440,7 +528,93 @@ async def migrate_repository_endpoint(repository_id: str, request: MigrateReposi
         if not repository.local_path:
             raise HTTPException(status_code=400, detail="Repository not cloned. Please analyze first.")
         
+        # Create migration ID
+        migration_id = f"repo_mig_{uuid4().hex[:8]}"
+        
+        # Store job info
+        migration_jobs[migration_id] = {
+            "status": "pending",
+            "repository_id": repository_id,
+            "request": request,
+            "created_at": datetime.now(),
+            "result": None
+        }
+        
+        # Initialize progress tracking
+        job_progress[migration_id] = {
+            "refactoring": {"progress": 0.0, "message": "Initializing..."},
+            "validation": {"progress": 0.0, "message": "Waiting..."}
+        }
+        
+        # Start migration in background
+        background_tasks.add_task(execute_repository_migration, migration_id, repository_id, request)
+        
+        return MigrateResponse(
+            migration_id=migration_id,
+            status="pending",
+            message="Repository migration started",
+            created_at=datetime.now()
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        error_msg = str(e)
+        error_traceback = traceback.format_exc()
+        
+        logger.error(f"Error initiating repository migration: {error_msg}")
+        logger.error(f"Traceback: {error_traceback}")
+        print(f"ERROR initiating repository migration: {error_msg}")
+        print(f"Traceback: {error_traceback}")
+        
+        raise HTTPException(status_code=500, detail=error_msg)
+
+
+def execute_repository_migration(migration_id: str, repository_id: str, request: MigrateRepositoryRequest):
+    """Execute repository migration in the background with progress tracking"""
+    try:
+        # Update status to in progress
+        migration_jobs[migration_id]["status"] = "in_progress"
+        
+        # Progress tracking functions
+        def update_refactoring_progress(message: str, progress: float):
+            if migration_id in job_progress:
+                job_progress[migration_id]["refactoring"] = {
+                    "progress": progress,
+                    "message": message
+                }
+        
+        def update_validation_progress(message: str, progress: float):
+            if migration_id in job_progress:
+                job_progress[migration_id]["validation"] = {
+                    "progress": progress,
+                    "message": message
+                }
+        
+        update_refactoring_progress("Loading repository...", 5.0)
+        
+        from infrastructure.repositories.repository_repository import RepositoryRepositoryAdapter
+        from infrastructure.adapters.mar_generator import MARGenerator
+        
+        repo_repo = RepositoryRepositoryAdapter()
+        repository = repo_repo.load(repository_id)
+        
+        if not repository:
+            migration_jobs[migration_id]["status"] = "failed"
+            migration_jobs[migration_id]["result"] = {"error": "Repository not found"}
+            return
+        
+        if not repository.local_path:
+            migration_jobs[migration_id]["status"] = "failed"
+            migration_jobs[migration_id]["result"] = {"error": "Repository not cloned"}
+            return
+        
         # Regenerate MAR
+        update_refactoring_progress("Analyzing repository...", 15.0)
         mar_generator = MARGenerator()
         mar = mar_generator.generate_mar(
             repository_path=repository.local_path,
@@ -450,6 +624,7 @@ async def migrate_repository_endpoint(repository_id: str, request: MigrateReposi
         )
         
         # Execute migration
+        update_refactoring_progress(f"Refactoring {len(request.services or [])} service(s)...", 30.0)
         use_case = ExecuteRepositoryMigrationUseCase()
         result = use_case.execute(
             repository_id=repository_id,
@@ -457,6 +632,38 @@ async def migrate_repository_endpoint(repository_id: str, request: MigrateReposi
             services_to_migrate=request.services,
             run_tests=request.run_tests
         )
+        update_refactoring_progress("Refactoring complete", 90.0)
+        
+        # Validate refactored files
+        update_validation_progress("Starting validation...", 0.0)
+        from application.use_cases.validate_gcp_code_use_case import ValidateGCPCodeUseCase
+        
+        validator = ValidateGCPCodeUseCase()
+        validation_results = {}
+        
+        if result.get('refactored_files'):
+            total_files = len(result['refactored_files'])
+            for idx, (file_path, file_content) in enumerate(result['refactored_files'].items()):
+                if file_content:
+                    update_validation_progress(f"Validating {file_path}...", (idx / total_files) * 90.0)
+                    validation_result = validator.validate(
+                        file_content,
+                        language='python' if file_path.endswith('.py') else 'java',
+                        progress_callback=lambda msg, pct: update_validation_progress(
+                            f"{file_path}: {msg}", 
+                            ((idx / total_files) * 90.0) + (pct * 0.9 / total_files)
+                        )
+                    )
+                    validation_results[file_path] = {
+                        "is_valid": validation_result.is_valid,
+                        "errors": validation_result.errors,
+                        "warnings": validation_result.warnings,
+                        "aws_patterns_found": validation_result.aws_patterns_found,
+                        "azure_patterns_found": validation_result.azure_patterns_found
+                    }
+        
+        update_validation_progress("Validation complete", 100.0)
+        update_refactoring_progress("Refactoring complete", 100.0)
         
         # Create PR if requested
         pr_url = None
@@ -498,21 +705,14 @@ async def migrate_repository_endpoint(repository_id: str, request: MigrateReposi
             "test_results": result.get('test_results'),
             "pr_url": pr_url,
             "error": result.get('error'),
-            "refactored_files": result.get('refactored_files', {})  # Include refactored file contents
+            "refactored_files": result.get('refactored_files', {}),
+            "validation": validation_results
         }
         
-        # Debug logging
-        logger.info(f"API Response - refactored_files keys: {list(response_data.get('refactored_files', {}).keys())}")
-        for file_name, content in response_data.get('refactored_files', {}).items():
-            if content:
-                logger.info(f"API Response - {file_name}: {len(content)} characters")
-            else:
-                logger.warning(f"API Response - {file_name}: None/Empty")
+        # Update job status
+        migration_jobs[migration_id]["status"] = "completed" if result['success'] else "failed"
+        migration_jobs[migration_id]["result"] = response_data
         
-        return response_data
-        
-    except HTTPException:
-        raise
     except Exception as e:
         import traceback
         import logging
@@ -526,7 +726,8 @@ async def migrate_repository_endpoint(repository_id: str, request: MigrateReposi
         print(f"ERROR executing repository migration: {error_msg}")
         print(f"Traceback: {error_traceback}")
         
-        raise HTTPException(status_code=500, detail=error_msg)
+        migration_jobs[migration_id]["status"] = "failed"
+        migration_jobs[migration_id]["result"] = {"error": error_msg}
 
 
 @app.get("/api/repository/{repository_id}/files/{file_path:path}")
