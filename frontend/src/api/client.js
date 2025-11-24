@@ -5,7 +5,7 @@ const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:800
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120000, // 2 minutes for repository operations
+  timeout: 600000, // 10 minutes for long-running repository operations
   headers: {
     'Content-Type': 'application/json',
   },
@@ -45,6 +45,8 @@ export const analyzeRepository = async (repositoryUrl, branch = 'main', token = 
 // Function to migrate a repository
 export const migrateRepository = async ({ repositoryId, services, createPR = false, branchName = null, runTests = false }) => {
   try {
+    // Use apiClient with extended timeout for repository migration (10 minutes)
+    // Repository migrations with many services can take a long time
     const response = await apiClient.post(`/api/repository/${repositoryId}/migrate`, {
       services,
       create_pr: createPR,
@@ -54,6 +56,10 @@ export const migrateRepository = async ({ repositoryId, services, createPR = fal
     return response.data;
   } catch (error) {
     console.error('Repository migration error:', error);
+    // Provide more helpful error messages for timeout
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+      throw new Error('Repository migration timed out. This can happen when migrating many services. Please try with fewer services or wait a bit longer.');
+    }
     throw new Error(error.response?.data?.detail || error.message || 'Repository migration failed');
   }
 };

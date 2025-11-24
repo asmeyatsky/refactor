@@ -68,7 +68,62 @@ class GitAdapter:
     
     def normalize_url(self, url: str, provider: GitProvider) -> str:
         """Normalize Git URL for cloning"""
-        # Remove .git suffix if present
+        original_url = url
+        
+        # Handle GitHub web URLs (e.g., https://github.com/owner/repo/tree/branch/path)
+        if provider == GitProvider.GITHUB:
+            # Extract owner/repo from URL, removing any /tree/branch/path parts
+            if url.startswith('https://github.com/') or url.startswith('http://github.com/'):
+                # Remove protocol
+                path = url.replace('https://github.com/', '').replace('http://github.com/', '')
+                # Split and take first two parts (owner/repo)
+                parts = path.split('/')
+                if len(parts) >= 2:
+                    owner, repo = parts[0], parts[1]
+                    # Remove .git if present
+                    repo = repo.rstrip('.git')
+                    url = f'https://github.com/{owner}/{repo}'
+            elif url.startswith('git@github.com:'):
+                # Remove git@ prefix and extract owner/repo
+                path = url.replace('git@github.com:', '')
+                parts = path.split('/')
+                if len(parts) >= 2:
+                    owner, repo = parts[0], parts[1].split('/')[0].split('.git')[0]
+                    url = f'git@github.com:{owner}/{repo}'
+        
+        # Handle GitLab web URLs (e.g., https://gitlab.com/owner/repo/-/tree/branch/path)
+        elif provider == GitProvider.GITLAB:
+            if url.startswith('https://gitlab.com/') or url.startswith('http://gitlab.com/'):
+                path = url.replace('https://gitlab.com/', '').replace('http://gitlab.com/', '')
+                parts = path.split('/')
+                if len(parts) >= 2:
+                    owner, repo = parts[0], parts[1]
+                    repo = repo.rstrip('.git')
+                    url = f'https://gitlab.com/{owner}/{repo}'
+            elif url.startswith('git@gitlab.com:'):
+                path = url.replace('git@gitlab.com:', '')
+                parts = path.split('/')
+                if len(parts) >= 2:
+                    owner, repo = parts[0], parts[1].split('/')[0].split('.git')[0]
+                    url = f'git@gitlab.com:{owner}/{repo}'
+        
+        # Handle Bitbucket web URLs (e.g., https://bitbucket.org/owner/repo/src/branch/path)
+        elif provider == GitProvider.BITBUCKET:
+            if url.startswith('https://bitbucket.org/') or url.startswith('http://bitbucket.org/'):
+                path = url.replace('https://bitbucket.org/', '').replace('http://bitbucket.org/', '')
+                parts = path.split('/')
+                if len(parts) >= 2:
+                    owner, repo = parts[0], parts[1]
+                    repo = repo.rstrip('.git')
+                    url = f'https://bitbucket.org/{owner}/{repo}'
+            elif url.startswith('git@bitbucket.org:'):
+                path = url.replace('git@bitbucket.org:', '')
+                parts = path.split('/')
+                if len(parts) >= 2:
+                    owner, repo = parts[0], parts[1].split('/')[0].split('.git')[0]
+                    url = f'git@bitbucket.org:{owner}/{repo}'
+        
+        # Remove .git suffix if present (after normalization)
         url = url.rstrip('.git')
         
         # Convert HTTPS to SSH if credentials have SSH key
@@ -79,6 +134,10 @@ class GitAdapter:
                 url = url.replace('https://gitlab.com/', 'git@gitlab.com:')
             elif provider == GitProvider.BITBUCKET:
                 url = url.replace('https://bitbucket.org/', 'git@bitbucket.org:')
+        
+        # Ensure .git suffix for HTTPS URLs (git clone works better with it)
+        if url.startswith('https://') and not url.endswith('.git'):
+            url = url + '.git'
         
         return url
     
@@ -398,12 +457,16 @@ class GitAdapter:
     
     def _extract_repo_name(self, url: str) -> str:
         """Extract repository name from URL"""
+        # Normalize URL first to handle web URLs
+        provider = self.detect_provider(url)
+        normalized_url = self.normalize_url(url, provider)
+        
         # Remove protocol and .git suffix
-        url = url.replace('https://', '').replace('http://', '').replace('git@', '')
-        url = url.rstrip('.git')
+        normalized_url = normalized_url.replace('https://', '').replace('http://', '').replace('git@', '')
+        normalized_url = normalized_url.rstrip('.git')
         
         # Extract repo name (last part after /)
-        parts = url.split('/')
+        parts = normalized_url.split('/')
         if len(parts) >= 2:
             repo_name = parts[-1]
             # Remove any special characters
@@ -471,11 +534,14 @@ class GitHubAdapter(GitAdapter):
     
     def _parse_github_url(self, url: str) -> tuple:
         """Parse GitHub URL to extract owner and repo"""
-        # Remove protocol and .git suffix
-        url = url.replace('https://github.com/', '').replace('http://github.com/', '')
-        url = url.replace('git@github.com:', '').rstrip('.git')
+        # Normalize URL first to handle web URLs
+        normalized_url = self.normalize_url(url, GitProvider.GITHUB)
         
-        parts = url.split('/')
+        # Remove protocol and .git suffix
+        normalized_url = normalized_url.replace('https://github.com/', '').replace('http://github.com/', '')
+        normalized_url = normalized_url.replace('git@github.com:', '').rstrip('.git')
+        
+        parts = normalized_url.split('/')
         if len(parts) >= 2:
             return parts[0], parts[1]
         raise ValueError(f"Invalid GitHub URL: {url}")
@@ -531,13 +597,16 @@ class GitLabAdapter(GitAdapter):
     
     def _parse_gitlab_url(self, url: str) -> str:
         """Parse GitLab URL to extract project path"""
+        # Normalize URL first to handle web URLs
+        normalized_url = self.normalize_url(url, GitProvider.GITLAB)
+        
         # Remove protocol and .git suffix
-        url = url.replace('https://gitlab.com/', '').replace('http://gitlab.com/', '')
-        url = url.replace('git@gitlab.com:', '').rstrip('.git')
+        normalized_url = normalized_url.replace('https://gitlab.com/', '').replace('http://gitlab.com/', '')
+        normalized_url = normalized_url.replace('git@gitlab.com:', '').rstrip('.git')
         
         # URL encode the project path
         from urllib.parse import quote
-        return quote(url, safe='/')
+        return quote(normalized_url, safe='/')
 
 
 class BitbucketAdapter(GitAdapter):
@@ -595,11 +664,14 @@ class BitbucketAdapter(GitAdapter):
     
     def _parse_bitbucket_url(self, url: str) -> tuple:
         """Parse Bitbucket URL to extract workspace and repo"""
-        # Remove protocol and .git suffix
-        url = url.replace('https://bitbucket.org/', '').replace('http://bitbucket.org/', '')
-        url = url.replace('git@bitbucket.org:', '').rstrip('.git')
+        # Normalize URL first to handle web URLs
+        normalized_url = self.normalize_url(url, GitProvider.BITBUCKET)
         
-        parts = url.split('/')
+        # Remove protocol and .git suffix
+        normalized_url = normalized_url.replace('https://bitbucket.org/', '').replace('http://bitbucket.org/', '')
+        normalized_url = normalized_url.replace('git@bitbucket.org:', '').rstrip('.git')
+        
+        parts = normalized_url.split('/')
         if len(parts) >= 2:
             return parts[0], parts[1]
         raise ValueError(f"Invalid Bitbucket URL: {url}")

@@ -23,7 +23,9 @@ import {
   Warning as WarningIcon,
   Storage as StorageIcon,
   Code as CodeIcon,
-  Assessment as AssessmentIcon
+  Assessment as AssessmentIcon,
+  Refresh as RefreshIcon,
+  Clear as ClearIcon
 } from '@mui/icons-material';
 
 const RepositoryInput = ({
@@ -36,7 +38,8 @@ const RepositoryInput = ({
   loading,
   cloudProvider,
   selectedServices,
-  onServicesChange
+  onServicesChange,
+  onClearAnalysis
 }) => {
   const [urlError, setUrlError] = useState('');
 
@@ -101,16 +104,28 @@ const RepositoryInput = ({
           placeholder="main"
           sx={{ mb: 2 }}
         />
-        <Button
-          variant="contained"
-          startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
-          onClick={onAnalyze}
-          disabled={loading || !repositoryUrl.trim() || !!urlError}
-          fullWidth
-          sx={{ mb: 2 }}
-        >
-          {loading ? 'Analyzing...' : 'Analyze Repository'}
-        </Button>
+        <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+          <Button
+            variant="contained"
+            startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
+            onClick={onAnalyze}
+            disabled={loading || !repositoryUrl.trim() || !!urlError}
+            sx={{ flex: 1 }}
+          >
+            {loading ? 'Analyzing...' : analysisResult ? 'Re-analyze Repository' : 'Analyze Repository'}
+          </Button>
+          {analysisResult && (
+            <Button
+              variant="outlined"
+              startIcon={<ClearIcon />}
+              onClick={onClearAnalysis}
+              disabled={loading}
+              color="secondary"
+            >
+              Clear
+            </Button>
+          )}
+        </Box>
       </Box>
 
       {analysisResult && analysisResult.mar && (
@@ -180,6 +195,15 @@ const RepositoryInput = ({
 
             {availableServices.length > 0 && (
               <Box sx={{ mt: 3 }}>
+                {selectedServices.length > 5 && (
+                  <Alert severity="warning" sx={{ mb: 2 }}>
+                    <Typography variant="body2">
+                      <strong>Warning:</strong> You have selected {selectedServices.length} services. 
+                      Migrating many services may take a long time (10+ minutes). 
+                      Consider selecting fewer services for faster results.
+                    </Typography>
+                  </Alert>
+                )}
                 <Autocomplete
                   multiple
                   options={availableServices}
@@ -192,7 +216,8 @@ const RepositoryInput = ({
                     <TextField
                       {...params}
                       label="Select Services to Migrate"
-                      placeholder="All services selected by default"
+                      placeholder="Select services to migrate (you can modify this selection)"
+                      helperText={`${selectedServices.length} of ${availableServices.length} services selected`}
                     />
                   )}
                   renderTags={(value, getTagProps) =>
