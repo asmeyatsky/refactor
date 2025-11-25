@@ -73,28 +73,33 @@ class ExtendedASTTransformationEngine:
             # Use Gemini for Java transformations (same approach as Python)
             transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, language='java')
             
+            # Always apply aggressive cleanup after Gemini transformation for Java
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Applying aggressive Java AWS cleanup")
+            transformed_code = self._aggressive_java_aws_cleanup(transformed_code)
+            
             # Validate output - reject if still has AWS patterns
             max_retries = 2
             retry_count = 0
             while self._has_aws_patterns(transformed_code, language='java') and retry_count < max_retries:
                 retry_count += 1
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.warning(f"Java output still contains AWS patterns, retrying (attempt {retry_count}/{max_retries})")
                 transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, retry=True, language='java')
-            
-            # Fallback to regex transformer if Gemini fails
-            if self._has_aws_patterns(transformed_code, language='java'):
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning("Gemini Java transformation still has AWS patterns, applying aggressive cleanup")
-                # Apply aggressive cleanup for Java
+                # Apply cleanup again after retry
                 transformed_code = self._aggressive_java_aws_cleanup(transformed_code)
-                # If still has patterns, use regex transformer
+            
+            # Final cleanup pass
+            if self._has_aws_patterns(transformed_code, language='java'):
+                logger.warning("Still has AWS patterns after retries, applying final aggressive cleanup")
+                transformed_code = self._aggressive_java_aws_cleanup(transformed_code)
+                # If still has patterns, use regex transformer as last resort
                 if self._has_aws_patterns(transformed_code, language='java'):
-                    logger.warning("Still has AWS patterns after cleanup, falling back to regex transformer")
+                    logger.warning("Falling back to regex transformer")
                     transformer = self.transformers[language]
-                    transformed_code = transformer.transform(code, transformation_recipe)
+                    regex_transformed = transformer.transform(code, transformation_recipe)
+                    # Apply cleanup to regex output too
+                    transformed_code = self._aggressive_java_aws_cleanup(regex_transformed)
         elif language in ['csharp', 'c#']:
             # Use Gemini for C# transformations (same approach as Python/Java)
             transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, language='csharp')
@@ -684,16 +689,19 @@ class ExtendedASTTransformationEngine:
         if language == 'java':
             aws_patterns = [
                 r'com\.amazonaws',
+                r'software\.amazon\.awssdk',  # AWS SDK v2
                 r'AmazonS3',
                 r'AmazonDynamoDB',
                 r'AmazonSQS',
                 r'AmazonSNS',
                 r'RequestHandler',
                 r'AWS.*Client',
-                r'S3Client',
+                r'\bS3Client\b',  # Word boundary to avoid false positives
                 r'DynamoDBClient',
                 r'SQSClient',
                 r'SNSClient',
+                r'AmazonS3ClientBuilder',
+                r'S3ClientBuilder',
             ]
         elif language == 'csharp':
             aws_patterns = [
@@ -4814,7 +4822,7 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
     
     def _aggressive_java_aws_cleanup(self, code: str) -> str:
         """Aggressive cleanup of AWS patterns in Java code"""
-        # Remove all AWS S3 patterns
+        # Remove all AWS S3 patterns - comprehensive cleanup
         code = re.sub(r'\bAmazonS3\b', 'Storage', code)
         code = re.sub(r'\bS3Client\b', 'Storage', code)
         code = re.sub(r'\bs3Client\b', 'storage', code, flags=re.IGNORECASE)
@@ -4822,13 +4830,35 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         code = re.sub(r'\.s3\.', '.storage.', code, flags=re.IGNORECASE)
         code = re.sub(r'\bS3\s+operation\b', 'Cloud Storage operation', code, flags=re.IGNORECASE)
         code = re.sub(r'\bS3\s+client\b', 'Storage client', code, flags=re.IGNORECASE)
+        code = re.sub(r'\bS3\s+Client\b', 'Storage', code)
+        code = re.sub(r'\bAmazonS3ClientBuilder\b', 'StorageOptions', code)
+        code = re.sub(r'\bS3ClientBuilder\b', 'StorageOptions', code)
         
-        # Remove AWS imports
-        code = re.sub(r'import\s+com\.amazonaws\.services\.s3\..*?;', '', code)
-        code = re.sub(r'import\s+com\.amazonaws\.services\.s3\..*?;', '', code, flags=re.DOTALL)
+        # Remove AWS imports (all variations)
+        code = re.sub(r'import\s+com\.amazonaws\.services\.s3\..*?;', '', code, flags=re.MULTILINE)
+        code = re.sub(r'import\s+software\.amazon\.awssdk\.services\.s3\..*?;', '', code, flags=re.MULTILINE)
         
         # Replace any remaining AWS SDK references
         code = re.sub(r'com\.amazonaws\.services\.s3', 'com.google.cloud.storage', code)
+        code = re.sub(r'software\.amazon\.awssdk\.services\.s3', 'com.google.cloud.storage', code)
+        
+        # Clean up comments that mention S3
+        lines = code.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # If line is a comment and contains S3, replace it
+            stripped = line.strip()
+            if stripped.startswith('//') and ('s3' in stripped.lower() or 'S3' in stripped):
+                # Replace S3 references in comments
+                cleaned_line = re.sub(r'[Ss]3', 'Cloud Storage', line, flags=re.IGNORECASE)
+                cleaned_lines.append(cleaned_line)
+            elif '/*' in line and '*/' in line and ('s3' in line.lower() or 'S3' in line):
+                # Inline comment
+                cleaned_line = re.sub(r'[Ss]3', 'Cloud Storage', line, flags=re.IGNORECASE)
+                cleaned_lines.append(cleaned_line)
+            else:
+                cleaned_lines.append(line)
+        code = '\n'.join(cleaned_lines)
         
         return code
 

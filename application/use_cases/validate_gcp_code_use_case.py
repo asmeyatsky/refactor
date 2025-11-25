@@ -389,7 +389,7 @@ class ValidateGCPCodeUseCase:
         # Map regex patterns to readable names
         pattern_map = {
             r'\bboto3\s*\.\s*(client|resource)\s*\(': 'boto3.client() or boto3.resource()',
-            r'\bs3\s*\.\s*\w+': 'S3 operation',  # Only match actual method calls, not comments
+            # Removed: r'\bs3\s*\.\s*\w+': 'S3 operation' - too generic, causes false positives
             r'\w+\s*\.\s*create_bucket\s*\(': 'create_bucket()',
             r'\w+\s*\.\s*upload_file\s*\(': 'upload_file()',
             r'\w+\s*\.\s*download_file\s*\(': 'download_file()',
