@@ -7,6 +7,7 @@ The Universal Cloud Refactor Agent is an autonomous system designed to automate 
 - **Multi-Agent Architecture**: Implements Planner, Refactoring Engine, and Verification agents
 - **AST-Powered Transformations**: Uses Abstract Syntax Trees for reliable code transformations
 - **Multi-Cloud Migration Support**: Migrates AWS and Azure services to GCP equivalents
+- **Multi-Language Support** 🆕: Supports Python, Java, and C# (.NET) with Gemini API-powered transformations
 - **Auto-Detection**: Automatically detects AWS/Azure services in code and suggests migrations
 - **Comprehensive Verification**: Ensures behavioral preservation through testing
 - **Security Validation**: Implements mandatory security checks
@@ -259,6 +260,7 @@ python3 test_migration_direct.py
 - ✅ SNS (publish messages)
 - ✅ Multi-service migrations
 - ✅ Java code migrations (uses Gemini API for intelligent transformations)
+- ✅ C# (.NET) code migrations (uses Gemini API for intelligent transformations)
 
 **Unit Tests:**
 ```bash

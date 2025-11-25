@@ -94,6 +94,8 @@ const CodeSnippetInput = ({
           <Select value={language} label="Programming Language" onChange={(e) => onLanguageChange(e.target.value)}>
             <MenuItem value="python">Python</MenuItem>
             <MenuItem value="java">Java</MenuItem>
+            <MenuItem value="csharp">C# (.NET)</MenuItem>
+            <MenuItem value="c#">C# (.NET)</MenuItem>
           </Select>
         </FormControl>
 
@@ -149,7 +151,7 @@ const CodeSnippetInput = ({
         />
         <Box sx={{ position: 'absolute', top: 8, right: 8, display: 'flex', gap: 1 }}>
           <input
-            accept=".py,.java,.js,.ts"
+            accept=".py,.java,.js,.ts,.cs,.csx"
             style={{ display: 'none' }}
             id="file-upload"
             type="file"

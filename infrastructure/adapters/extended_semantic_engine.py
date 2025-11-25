@@ -25,7 +25,9 @@ class ExtendedASTTransformationEngine:
         self.service_mapper = ServiceMapper()
         self.transformers = {
             'python': ExtendedPythonTransformer(self.service_mapper),
-            'java': ExtendedJavaTransformer(self.service_mapper)  # Simplified implementation
+            'java': ExtendedJavaTransformer(self.service_mapper),
+            'csharp': ExtendedCSharpTransformer(self.service_mapper),  # Uses Gemini API
+            'c#': ExtendedCSharpTransformer(self.service_mapper)  # Alias
         }
     
     def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> tuple[str, dict]:
@@ -88,6 +90,28 @@ class ExtendedASTTransformationEngine:
                 logger.warning("Gemini Java transformation still has AWS patterns, falling back to regex")
                 transformer = self.transformers[language]
                 transformed_code = transformer.transform(code, transformation_recipe)
+        elif language in ['csharp', 'c#']:
+            # Use Gemini for C# transformations (same approach as Python/Java)
+            transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, language='csharp')
+            
+            # Validate output - reject if still has AWS patterns
+            max_retries = 2
+            retry_count = 0
+            while self._has_aws_patterns(transformed_code, language='csharp') and retry_count < max_retries:
+                retry_count += 1
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"C# output still contains AWS patterns, retrying (attempt {retry_count}/{max_retries})")
+                transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, retry=True, language='csharp')
+            
+            # Fallback to regex transformer if Gemini fails
+            if self._has_aws_patterns(transformed_code, language='csharp'):
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning("Gemini C# transformation still has AWS patterns, falling back to regex")
+                transformer = self.transformers.get('csharp') or self.transformers.get('c#')
+                if transformer:
+                    transformed_code = transformer.transform(code, transformation_recipe)
         else:
             # Fallback to existing transformer for other languages
             transformer = self.transformers[language]
@@ -139,6 +163,8 @@ class ExtendedASTTransformationEngine:
             # Build comprehensive prompt for direct transformation
             if language == 'java':
                 prompt = self._build_java_transformation_prompt(code, service_type, target_api, retry)
+            elif language == 'csharp':
+                prompt = self._build_csharp_transformation_prompt(code, service_type, target_api, retry)
             else:
                 prompt = self._build_transformation_prompt(code, service_type, target_api, retry)
             
@@ -437,6 +463,141 @@ class ExtendedASTTransformationEngine:
         
         return prompt
     
+    def _build_csharp_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
+        """Build a comprehensive prompt for Gemini to transform AWS C# code to GCP."""
+        
+        # Detect services from C# code
+        services_detected = []
+        if re.search(r'Amazon\.S3|AmazonS3|S3Client|AWSSDK\.S3', code, re.IGNORECASE):
+            services_detected.append('S3')
+        if re.search(r'Amazon\.DynamoDB|AmazonDynamoDB|DynamoDBClient|AWSSDK\.DynamoDB', code, re.IGNORECASE):
+            services_detected.append('DynamoDB')
+        if re.search(r'Amazon\.SQS|AmazonSQS|SQSClient|AWSSDK\.SQS', code, re.IGNORECASE):
+            services_detected.append('SQS')
+        if re.search(r'Amazon\.SNS|AmazonSNS|SNSClient|AWSSDK\.SNS', code, re.IGNORECASE):
+            services_detected.append('SNS')
+        if re.search(r'Amazon\.Lambda|ILambdaContext|LambdaFunction|APIGatewayProxy|AWSSDK\.Lambda', code, re.IGNORECASE):
+            services_detected.append('Lambda')
+        
+        services_str = ', '.join(services_detected) if services_detected else 'AWS services'
+        
+        retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
+        
+        prompt = f"""You are an expert C# code refactoring assistant. Transform the following AWS C# code to Google Cloud Platform (GCP) C# code.
+
+**CRITICAL REQUIREMENTS:**
+1. **ZERO AWS CODE** - The output must contain NO AWS patterns, classes, or APIs
+2. **Complete transformation** - Every AWS service call must be replaced with its GCP equivalent
+3. **Correct C# syntax** - Output must be valid, compilable C# code
+4. **Proper using statements** - Include all necessary GCP SDK using statements
+5. **Preserve class structure** - Maintain class declarations, method signatures, and structure
+6. **Correct API usage** - Use GCP C# APIs correctly, not AWS patterns with GCP imports
+7. **Async/await patterns** - Preserve async/await patterns where appropriate
+
+**SERVICES DETECTED:** {services_str}
+
+**TRANSFORMATION RULES:**
+
+**Lambda → Cloud Functions:**
+- `using Amazon.Lambda.Core;` → `using Google.Cloud.Functions.Framework; using Microsoft.AspNetCore.Http;`
+- `ILambdaContext context` → Remove (Cloud Functions use HttpContext)
+- `APIGatewayProxyRequest` → `HttpRequest`
+- `APIGatewayProxyResponse` → `HttpResponse`
+- `LambdaFunction` → `IHttpFunction` or `CloudEventFunction`
+- `FunctionHandler(APIGatewayProxyRequest request, ILambdaContext context)` → `HandleAsync(HttpContext context)`
+- Return statements → `await context.Response.WriteAsync(...)` and `context.Response.StatusCode = ...`
+
+**S3 → Cloud Storage:**
+- `using Amazon.S3;` → `using Google.Cloud.Storage.V1;`
+- `using Amazon.S3.Model;` → Remove (not needed for GCS)
+- `IAmazonS3 s3Client` → `StorageClient storage`
+- `new AmazonS3Client()` → `StorageClient.Create()`
+- `s3Client.PutObjectAsync(PutObjectRequest)` → `await storage.UploadObjectAsync(bucketName, objectName, contentType, stream)`
+- `s3Client.GetObjectAsync(GetObjectRequest)` → `await storage.DownloadObjectAsync(bucketName, objectName, stream)`
+- `PutObjectRequest` → Use `UploadObjectOptions` or direct parameters
+- `GetObjectRequest` → Use `DownloadObjectOptions` or direct parameters
+- `S3Exception` → `Google.Cloud.Storage.V1.StorageException`
+
+**DynamoDB → Firestore:**
+- `using Amazon.DynamoDBv2;` → `using Google.Cloud.Firestore;`
+- `using Amazon.DynamoDBv2.Model;` → Remove (not needed for Firestore)
+- `IAmazonDynamoDB dynamoDB` → `FirestoreDb firestore`
+- `new AmazonDynamoDBClient()` → `FirestoreDb.Create(projectId)`
+- `dynamoDB.PutItemAsync(PutItemRequest)` → `await firestore.Collection(collectionName).Document(documentId).SetAsync(data)`
+- `dynamoDB.GetItemAsync(GetItemRequest)` → `DocumentSnapshot document = await firestore.Collection(collectionName).Document(documentId).GetSnapshotAsync()`
+- `PutItemRequest` → Use Firestore `SetAsync()` method directly with Dictionary<string, object>
+- `GetItemRequest` → Use Firestore `GetSnapshotAsync()` method
+- Remove `AttributeValue` conversions - Firestore uses native C# types (Dictionary, List, string, int, double, bool)
+- Remove `ConvertToAttributeValues()` methods - not needed for Firestore
+
+**SQS → Pub/Sub:**
+- `using Amazon.SQS;` → `using Google.Cloud.PubSub.V1;`
+- `using Amazon.SQS.Model;` → Remove (not needed for Pub/Sub)
+- `IAmazonSQS sqsClient` → `PublisherClient publisher`
+- `new AmazonSQSClient()` → `await PublisherClient.CreateAsync(topicName)`
+- `sqsClient.SendMessageAsync(SendMessageRequest)` → `await publisher.PublishAsync(topicName, new PubsubMessage {{ Data = ByteString.CopyFromUtf8(messageBody) }})`
+- `SendMessageRequest` → Use `PubsubMessage` directly
+- `SQSException` → `Google.Api.Gax.GaxException` or appropriate GCP exception
+
+**SNS → Pub/Sub:**
+- `using Amazon.SNS;` → `using Google.Cloud.PubSub.V1;`
+- `using Amazon.SNS.Model;` → Remove (not needed for Pub/Sub)
+- `IAmazonSNS snsClient` → `PublisherClient publisher` (can reuse same publisher)
+- `new AmazonSNSClient()` → `await PublisherClient.CreateAsync(topicName)`
+- `snsClient.PublishAsync(PublishRequest)` → Same as SQS transformation above
+- Remove `Subject` parameter - Pub/Sub doesn't support it
+- `SNSException` → `Google.Api.Gax.GaxException`
+
+**Environment Variables:**
+- `DYNAMODB_TABLE_NAME` → `FIRESTORE_COLLECTION_NAME`
+- `SQS_QUEUE_URL` → `PUBSUB_TOPIC_NAME` and `GCP_PROJECT_ID`
+- `SNS_TOPIC_ARN` → `PUBSUB_TOPIC_NAME` and `GCP_PROJECT_ID`
+
+**Variable Naming:**
+- `s3Client` → `storage`
+- `dynamoDB` → `firestore`
+- `sqsClient` → `publisher`
+- `snsClient` → `publisher`
+
+**Exception Handling:**
+- `Amazon.*Exception` → `Google.Api.Gax.GaxException` or appropriate GCP exception
+- `AmazonServiceException` → `Google.Api.Gax.GaxException`
+- `AmazonClientException` → `System.Exception` or appropriate GCP exception
+
+**Code Structure:**
+- Preserve class names, method names (except handler methods)
+- Preserve access modifiers (public, private, protected, internal)
+- Preserve async/await patterns
+- Preserve attributes ([Fact], [Theory], etc.)
+- Maintain proper C# formatting and indentation
+- Ensure all using statements are correct and necessary
+- Use proper C# async patterns: `await` for async methods
+
+**Async Patterns:**
+- Preserve `async Task` and `async Task<T>` return types
+- Use `await` for all async GCP API calls
+- Ensure proper async/await usage throughout
+
+{retry_note}
+
+**INPUT CODE:**
+```csharp
+{code}
+```
+
+**OUTPUT REQUIREMENTS:**
+- Return ONLY the transformed C# code
+- NO explanations, NO markdown formatting, NO code blocks
+- Just pure, compilable C# code
+- Ensure ALL AWS patterns are removed
+- Ensure ALL GCP APIs are used correctly
+- Preserve the complete class structure
+- Use proper async/await patterns
+
+**TRANSFORMED GCP CODE:**"""
+        
+        return prompt
+    
     def _extract_code_from_response(self, response_text: str, language: str = 'python') -> str:
         """Extract code from Gemini response, handling various formats."""
         # Remove markdown code blocks
@@ -447,6 +608,14 @@ class ExtendedASTTransformationEngine:
                 response_text = parts[1].split('```')[0].strip()
         elif '```java' in response_text and language == 'java':
             parts = response_text.split('```java')
+            if len(parts) > 1:
+                response_text = parts[1].split('```')[0].strip()
+        elif '```csharp' in response_text and language == 'csharp':
+            parts = response_text.split('```csharp')
+            if len(parts) > 1:
+                response_text = parts[1].split('```')[0].strip()
+        elif '```c#' in response_text and language == 'csharp':
+            parts = response_text.split('```c#')
             if len(parts) > 1:
                 response_text = parts[1].split('```')[0].strip()
         elif '```' in response_text:
@@ -473,6 +642,10 @@ class ExtendedASTTransformationEngine:
                 if language == 'java':
                     if stripped.startswith(('package', 'import', 'public', 'private', 'class', 'interface', 'enum')):
                         code_started = True
+                elif language == 'csharp':
+                    # C# code starts with using, namespace, public, private, class, interface, enum
+                    if stripped.startswith(('using', 'namespace', 'public', 'private', 'class', 'interface', 'enum', 'static')):
+                        code_started = True
                 else:
                     if stripped.startswith(('import', 'from', 'def', 'class')):
                         code_started = True
@@ -496,6 +669,24 @@ class ExtendedASTTransformationEngine:
                 r'AmazonSNS',
                 r'RequestHandler',
                 r'AWS.*Client',
+                r'S3Client',
+                r'DynamoDBClient',
+                r'SQSClient',
+                r'SNSClient',
+            ]
+        elif language == 'csharp':
+            aws_patterns = [
+                r'Amazon\.',
+                r'AWSSDK\.',
+                r'AmazonS3',
+                r'AmazonDynamoDB',
+                r'AmazonSQS',
+                r'AmazonSNS',
+                r'AmazonLambda',
+                r'ILambdaContext',
+                r'APIGatewayProxy',
+                r'LambdaFunction',
+                r'Amazon.*Client',
                 r'S3Client',
                 r'DynamoDBClient',
                 r'SQSClient',
@@ -4537,6 +4728,60 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
             code
         )
         
+        return code
+
+
+class ExtendedCSharpTransformer(BaseExtendedTransformer):
+    """Extended transformer for C# code - uses Gemini API for transformations"""
+    
+    def transform(self, code: str, recipe: Dict[str, Any]) -> str:
+        """Transform C# code based on the recipe"""
+        # C# transformations are handled by Gemini API in transform_code()
+        # This is a fallback transformer for regex-based simple patterns
+        operation = recipe.get('operation', '')
+        service_type = recipe.get('service_type', '')
+        
+        if operation == 'service_migration' and service_type:
+            if service_type == 's3_to_gcs':
+                return self._migrate_s3_to_gcs(code)
+            elif service_type == 'lambda_to_cloud_functions':
+                return self._migrate_lambda_to_cloud_functions(code)
+            elif service_type == 'dynamodb_to_firestore':
+                return self._migrate_dynamodb_to_firestore(code)
+        
+        return code
+    
+    def _migrate_s3_to_gcs(self, code: str) -> str:
+        """Migrate AWS S3 C# code to Google Cloud Storage (fallback regex)"""
+        # Basic import replacement
+        code = re.sub(
+            r'using\s+Amazon\.S3[^;]*;',
+            'using Google.Cloud.Storage.V1;',
+            code
+        )
+        code = re.sub(
+            r'IAmazonS3\s+(\w+)\s*=',
+            r'StorageClient \1 =',
+            code
+        )
+        return code
+    
+    def _migrate_lambda_to_cloud_functions(self, code: str) -> str:
+        """Migrate AWS Lambda C# code to Google Cloud Functions (fallback regex)"""
+        code = re.sub(
+            r'using\s+Amazon\.Lambda[^;]*;',
+            'using Google.Cloud.Functions.Framework;',
+            code
+        )
+        return code
+    
+    def _migrate_dynamodb_to_firestore(self, code: str) -> str:
+        """Migrate AWS DynamoDB C# code to Google Cloud Firestore (fallback regex)"""
+        code = re.sub(
+            r'using\s+Amazon\.DynamoDBv2[^;]*;',
+            'using Google.Cloud.Firestore;',
+            code
+        )
         return code
 
 
