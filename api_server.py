@@ -44,8 +44,12 @@ if REQUIRE_AUTH:
     @app.middleware("http")
     async def authentication_middleware_handler(request: Request, call_next):
         """Authentication middleware handler"""
-        # Allow health checks and static files without auth
-        if request.url.path.startswith("/api/health") or request.url.path.startswith("/static"):
+        # Allow health checks, static files, and root path (frontend) without auth
+        # Frontend will handle SSO authentication when users interact with features
+        if (request.url.path.startswith("/api/health") or 
+            request.url.path.startswith("/static") or 
+            request.url.path == "/" or
+            not request.url.path.startswith("/api/")):
             return await call_next(request)
         
         # Validate authentication
