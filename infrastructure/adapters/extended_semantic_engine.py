@@ -601,7 +601,15 @@ class ExtendedASTTransformationEngine:
     def _extract_code_from_response(self, response_text: str, language: str = 'python') -> str:
         """Extract code from Gemini response, handling various formats."""
         # Remove markdown code blocks
-        code_block_marker = f'```{language}' if language != 'python' else '```python'
+        # Handle language-specific code block markers
+        if language == 'csharp':
+            code_block_marker = '```csharp'
+        elif language == 'java':
+            code_block_marker = '```java'
+        elif language == 'python':
+            code_block_marker = '```python'
+        else:
+            code_block_marker = f'```{language}'
         if code_block_marker in response_text:
             parts = response_text.split(code_block_marker)
             if len(parts) > 1:
@@ -616,6 +624,10 @@ class ExtendedASTTransformationEngine:
                 response_text = parts[1].split('```')[0].strip()
         elif '```c#' in response_text and language == 'csharp':
             parts = response_text.split('```c#')
+            if len(parts) > 1:
+                response_text = parts[1].split('```')[0].strip()
+        elif '```cs' in response_text and language == 'csharp':
+            parts = response_text.split('```cs')
             if len(parts) > 1:
                 response_text = parts[1].split('```')[0].strip()
         elif '```' in response_text:
