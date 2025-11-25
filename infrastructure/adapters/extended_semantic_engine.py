@@ -104,24 +104,34 @@ class ExtendedASTTransformationEngine:
             # Use Gemini for C# transformations (same approach as Python/Java)
             transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, language='csharp')
             
+            # Always apply aggressive cleanup after Gemini transformation for C#
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Applying aggressive C# AWS cleanup")
+            transformed_code = self._aggressive_csharp_aws_cleanup(transformed_code)
+            
             # Validate output - reject if still has AWS patterns
             max_retries = 2
             retry_count = 0
             while self._has_aws_patterns(transformed_code, language='csharp') and retry_count < max_retries:
                 retry_count += 1
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.warning(f"C# output still contains AWS patterns, retrying (attempt {retry_count}/{max_retries})")
                 transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, retry=True, language='csharp')
+                # Apply cleanup again after retry
+                transformed_code = self._aggressive_csharp_aws_cleanup(transformed_code)
             
-            # Fallback to regex transformer if Gemini fails
+            # Final cleanup pass
             if self._has_aws_patterns(transformed_code, language='csharp'):
-                import logging
-                logger = logging.getLogger(__name__)
-                logger.warning("Gemini C# transformation still has AWS patterns, falling back to regex")
-                transformer = self.transformers.get('csharp') or self.transformers.get('c#')
-                if transformer:
-                    transformed_code = transformer.transform(code, transformation_recipe)
+                logger.warning("Still has AWS patterns after retries, applying final aggressive cleanup")
+                transformed_code = self._aggressive_csharp_aws_cleanup(transformed_code)
+                # If still has patterns, use regex transformer as last resort
+                if self._has_aws_patterns(transformed_code, language='csharp'):
+                    logger.warning("Falling back to regex transformer")
+                    transformer = self.transformers.get('csharp') or self.transformers.get('c#')
+                    if transformer:
+                        regex_transformed = transformer.transform(code, transformation_recipe)
+                        # Apply cleanup to regex output too
+                        transformed_code = self._aggressive_csharp_aws_cleanup(regex_transformed)
         else:
             # Fallback to existing transformer for other languages
             transformer = self.transformers[language]
@@ -707,19 +717,17 @@ class ExtendedASTTransformationEngine:
             aws_patterns = [
                 r'Amazon\.',
                 r'AWSSDK\.',
-                r'AmazonS3',
-                r'AmazonDynamoDB',
-                r'AmazonSQS',
-                r'AmazonSNS',
-                r'AmazonLambda',
-                r'ILambdaContext',
-                r'APIGatewayProxy',
-                r'LambdaFunction',
-                r'Amazon.*Client',
-                r'S3Client',
-                r'DynamoDBClient',
-                r'SQSClient',
-                r'SNSClient',
+                r'\bIAmazonS3\b',  # Word boundary to avoid false positives
+                r'\bAmazonS3Client\b',
+                r'\bIAmazonDynamoDB\b',
+                r'\bAmazonDynamoDBClient\b',
+                r'\bIAmazonSQS\b',
+                r'\bAmazonSQSClient\b',
+                r'\bIAmazonSNS\b',
+                r'\bAmazonSNSClient\b',
+                r'\bILambdaContext\b',
+                r'\bAPIGatewayProxyRequest\b',
+                r'\bAPIGatewayProxyResponse\b',
             ]
         else:
             aws_patterns = [
@@ -4861,6 +4869,74 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         code = '\n'.join(cleaned_lines)
         
         return code
+    
+    def _aggressive_csharp_aws_cleanup(self, code: str) -> str:
+        """Aggressive cleanup of AWS patterns in C# code"""
+        # Remove all AWS S3 patterns - comprehensive cleanup
+        code = re.sub(r'\bIAmazonS3\b', 'StorageClient', code)
+        code = re.sub(r'\bAmazonS3Client\b', 'StorageClient', code)
+        code = re.sub(r'\bs3Client\b', 'storageClient', code, flags=re.IGNORECASE)
+        code = re.sub(r'\bs3_client\b', 'storageClient', code, flags=re.IGNORECASE)
+        
+        # Remove AWS DynamoDB patterns
+        code = re.sub(r'\bIAmazonDynamoDB\b', 'FirestoreDb', code)
+        code = re.sub(r'\bAmazonDynamoDBClient\b', 'FirestoreDb', code)
+        code = re.sub(r'\bdynamoDB\b', 'firestoreDb', code, flags=re.IGNORECASE)
+        code = re.sub(r'\bdynamo_db\b', 'firestoreDb', code, flags=re.IGNORECASE)
+        
+        # Remove AWS Lambda patterns
+        code = re.sub(r'\bILambdaContext\b', 'HttpContext', code)
+        code = re.sub(r'\bAPIGatewayProxyRequest\b', 'HttpRequest', code)
+        code = re.sub(r'\bAPIGatewayProxyResponse\b', 'HttpResponse', code)
+        
+        # Remove AWS SQS patterns
+        code = re.sub(r'\bIAmazonSQS\b', 'PublisherClient', code)
+        code = re.sub(r'\bAmazonSQSClient\b', 'PublisherClient', code)
+        code = re.sub(r'\bsqsClient\b', 'publisherClient', code, flags=re.IGNORECASE)
+        
+        # Remove AWS SNS patterns
+        code = re.sub(r'\bIAmazonSNS\b', 'PublisherClient', code)
+        code = re.sub(r'\bAmazonSNSClient\b', 'PublisherClient', code)
+        code = re.sub(r'\bsnsClient\b', 'publisherClient', code, flags=re.IGNORECASE)
+        
+        # Remove AWS imports (all variations)
+        code = re.sub(r'using\s+Amazon\.S3[^;]*;', '', code, flags=re.MULTILINE)
+        code = re.sub(r'using\s+Amazon\.DynamoDBv2[^;]*;', '', code, flags=re.MULTILINE)
+        code = re.sub(r'using\s+Amazon\.Lambda[^;]*;', '', code, flags=re.MULTILINE)
+        code = re.sub(r'using\s+Amazon\.SQS[^;]*;', '', code, flags=re.MULTILINE)
+        code = re.sub(r'using\s+Amazon\.SNS[^;]*;', '', code, flags=re.MULTILINE)
+        code = re.sub(r'using\s+AWSSDK[^;]*;', '', code, flags=re.MULTILINE)
+        
+        # Replace any remaining AWS SDK references
+        code = re.sub(r'Amazon\.S3', 'Google.Cloud.Storage', code)
+        code = re.sub(r'Amazon\.DynamoDBv2', 'Google.Cloud.Firestore', code)
+        code = re.sub(r'Amazon\.Lambda', 'Google.Cloud.Functions', code)
+        code = re.sub(r'Amazon\.SQS', 'Google.Cloud.PubSub', code)
+        code = re.sub(r'Amazon\.SNS', 'Google.Cloud.PubSub', code)
+        
+        # Clean up comments that mention AWS services
+        lines = code.split('\n')
+        cleaned_lines = []
+        for line in lines:
+            # If line is a comment and contains AWS references, replace them
+            stripped = line.strip()
+            if stripped.startswith('//') and ('amazon' in stripped.lower() or 'aws' in stripped.lower() or 's3' in stripped.lower()):
+                # Replace AWS references in comments
+                cleaned_line = re.sub(r'[Aa]mazon\.?[Ss]3', 'Cloud Storage', line, flags=re.IGNORECASE)
+                cleaned_line = re.sub(r'[Aa]WS', 'GCP', cleaned_line, flags=re.IGNORECASE)
+                cleaned_line = re.sub(r'\b[Ss]3\b', 'Cloud Storage', cleaned_line, flags=re.IGNORECASE)
+                cleaned_lines.append(cleaned_line)
+            elif '/*' in line and '*/' in line and ('amazon' in line.lower() or 'aws' in line.lower() or 's3' in line.lower()):
+                # Inline comment
+                cleaned_line = re.sub(r'[Aa]mazon\.?[Ss]3', 'Cloud Storage', line, flags=re.IGNORECASE)
+                cleaned_line = re.sub(r'[Aa]WS', 'GCP', cleaned_line, flags=re.IGNORECASE)
+                cleaned_line = re.sub(r'\b[Ss]3\b', 'Cloud Storage', cleaned_line, flags=re.IGNORECASE)
+                cleaned_lines.append(cleaned_line)
+            else:
+                cleaned_lines.append(line)
+        code = '\n'.join(cleaned_lines)
+        
+        return code
 
 
 class ExtendedCSharpTransformer(BaseExtendedTransformer):
@@ -4915,6 +4991,74 @@ class ExtendedCSharpTransformer(BaseExtendedTransformer):
             code
         )
         return code
+    
+    def _aggressive_csharp_aws_cleanup(self, code: str) -> str:
+    """Aggressive cleanup of AWS patterns in C# code"""
+    # Remove all AWS S3 patterns - comprehensive cleanup
+    code = re.sub(r'\bIAmazonS3\b', 'StorageClient', code)
+    code = re.sub(r'\bAmazonS3Client\b', 'StorageClient', code)
+    code = re.sub(r'\bs3Client\b', 'storageClient', code, flags=re.IGNORECASE)
+    code = re.sub(r'\bs3_client\b', 'storageClient', code, flags=re.IGNORECASE)
+    
+    # Remove AWS DynamoDB patterns
+    code = re.sub(r'\bIAmazonDynamoDB\b', 'FirestoreDb', code)
+    code = re.sub(r'\bAmazonDynamoDBClient\b', 'FirestoreDb', code)
+    code = re.sub(r'\bdynamoDB\b', 'firestoreDb', code, flags=re.IGNORECASE)
+    code = re.sub(r'\bdynamo_db\b', 'firestoreDb', code, flags=re.IGNORECASE)
+    
+    # Remove AWS Lambda patterns
+    code = re.sub(r'\bILambdaContext\b', 'HttpContext', code)
+    code = re.sub(r'\bAPIGatewayProxyRequest\b', 'HttpRequest', code)
+    code = re.sub(r'\bAPIGatewayProxyResponse\b', 'HttpResponse', code)
+    
+    # Remove AWS SQS patterns
+    code = re.sub(r'\bIAmazonSQS\b', 'PublisherClient', code)
+    code = re.sub(r'\bAmazonSQSClient\b', 'PublisherClient', code)
+    code = re.sub(r'\bsqsClient\b', 'publisherClient', code, flags=re.IGNORECASE)
+    
+    # Remove AWS SNS patterns
+    code = re.sub(r'\bIAmazonSNS\b', 'PublisherClient', code)
+    code = re.sub(r'\bAmazonSNSClient\b', 'PublisherClient', code)
+    code = re.sub(r'\bsnsClient\b', 'publisherClient', code, flags=re.IGNORECASE)
+    
+    # Remove AWS imports (all variations)
+    code = re.sub(r'using\s+Amazon\.S3[^;]*;', '', code, flags=re.MULTILINE)
+    code = re.sub(r'using\s+Amazon\.DynamoDBv2[^;]*;', '', code, flags=re.MULTILINE)
+    code = re.sub(r'using\s+Amazon\.Lambda[^;]*;', '', code, flags=re.MULTILINE)
+    code = re.sub(r'using\s+Amazon\.SQS[^;]*;', '', code, flags=re.MULTILINE)
+    code = re.sub(r'using\s+Amazon\.SNS[^;]*;', '', code, flags=re.MULTILINE)
+    code = re.sub(r'using\s+AWSSDK[^;]*;', '', code, flags=re.MULTILINE)
+    
+    # Replace any remaining AWS SDK references
+    code = re.sub(r'Amazon\.S3', 'Google.Cloud.Storage', code)
+    code = re.sub(r'Amazon\.DynamoDBv2', 'Google.Cloud.Firestore', code)
+    code = re.sub(r'Amazon\.Lambda', 'Google.Cloud.Functions', code)
+    code = re.sub(r'Amazon\.SQS', 'Google.Cloud.PubSub', code)
+    code = re.sub(r'Amazon\.SNS', 'Google.Cloud.PubSub', code)
+    
+    # Clean up comments that mention AWS services
+    lines = code.split('\n')
+    cleaned_lines = []
+    for line in lines:
+        # If line is a comment and contains AWS references, replace them
+        stripped = line.strip()
+        if stripped.startswith('//') and ('amazon' in stripped.lower() or 'aws' in stripped.lower() or 's3' in stripped.lower()):
+            # Replace AWS references in comments
+            cleaned_line = re.sub(r'[Aa]mazon\.?[Ss]3', 'Cloud Storage', line, flags=re.IGNORECASE)
+            cleaned_line = re.sub(r'[Aa]WS', 'GCP', cleaned_line, flags=re.IGNORECASE)
+            cleaned_line = re.sub(r'\b[Ss]3\b', 'Cloud Storage', cleaned_line, flags=re.IGNORECASE)
+            cleaned_lines.append(cleaned_line)
+        elif '/*' in line and '*/' in line and ('amazon' in line.lower() or 'aws' in line.lower() or 's3' in line.lower()):
+            # Inline comment
+            cleaned_line = re.sub(r'[Aa]mazon\.?[Ss]3', 'Cloud Storage', line, flags=re.IGNORECASE)
+            cleaned_line = re.sub(r'[Aa]WS', 'GCP', cleaned_line, flags=re.IGNORECASE)
+            cleaned_line = re.sub(r'\b[Ss]3\b', 'Cloud Storage', cleaned_line, flags=re.IGNORECASE)
+            cleaned_lines.append(cleaned_line)
+        else:
+            cleaned_lines.append(line)
+    code = '\n'.join(cleaned_lines)
+    
+    return code
 
 
 class ExtendedSemanticRefactoringService:
