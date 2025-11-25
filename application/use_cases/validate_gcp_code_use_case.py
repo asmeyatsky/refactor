@@ -262,6 +262,14 @@ class ValidateGCPCodeUseCase:
                 # Check for balanced braces and basic structure
                 if '{' not in code or '}' not in code:
                     return False
+            elif language in ['csharp', 'c#']:
+                # Basic C# syntax check
+                # Check for balanced braces and basic structure
+                if '{' not in code or '}' not in code:
+                    return False
+                # C# should have using statements or namespace
+                if 'using' not in code and 'namespace' not in code:
+                    return False
                 # Check for balanced braces
                 open_braces = code.count('{')
                 close_braces = code.count('}')
