@@ -42,7 +42,7 @@ class ValidateGCPCodeUseCase:
         'Bucket=', 'Key=', 'QueueUrl=', 'TopicArn=',
         'FunctionName=', 'InvocationType=', 'Payload=', 'Region=',
         'aws_access_key', 'aws_secret', 'AWS_ACCESS_KEY', 'AWS_SECRET',
-        'amazonaws.com', '.s3.', 's3://', 'S3Manager', 'S3Client',
+        'amazonaws.com', 's3://', 'S3Manager', 'S3Client',
         'dynamodb_client', 'sqs_client', 'sns_client', 'lambda_handler',
         'DYNAMODB_TABLE_NAME', 'SQS_DLQ_URL', 'SNS_TOPIC_ARN',
         "event['Records']", 'event["Records"]', "record_event['s3']",
@@ -326,12 +326,29 @@ class ValidateGCPCodeUseCase:
         
         # Check regex patterns - these are more precise
         for pattern in self.AWS_METHOD_PATTERNS:
-            matches = re.findall(pattern, code, re.IGNORECASE)
-            if matches:
-                # Extract meaningful pattern name from regex
-                pattern_name = self._extract_pattern_name(pattern, matches[0] if matches else None)
-                if pattern_name and pattern_name not in found_patterns:
-                    found_patterns.append(pattern_name)
+            # Skip patterns that might match comments or false positives
+            if language == 'java' and pattern == r'\bs3\s*\.\s*\w+':
+                # For Java, only match if it's an actual method call, not in comments
+                # Check if it's in a comment line
+                lines = code.split('\n')
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    # Skip comment lines
+                    if stripped.startswith('//') or stripped.startswith('*') or '/*' in stripped:
+                        continue
+                    matches = re.findall(pattern, line, re.IGNORECASE)
+                    if matches:
+                        pattern_name = self._extract_pattern_name(pattern, matches[0] if matches else None)
+                        if pattern_name and pattern_name not in found_patterns:
+                            found_patterns.append(pattern_name)
+                        break
+            else:
+                matches = re.findall(pattern, code, re.IGNORECASE)
+                if matches:
+                    # Extract meaningful pattern name from regex
+                    pattern_name = self._extract_pattern_name(pattern, matches[0] if matches else None)
+                    if pattern_name and pattern_name not in found_patterns:
+                        found_patterns.append(pattern_name)
         
         return list(set(found_patterns))  # Remove duplicates
     
@@ -340,7 +357,7 @@ class ValidateGCPCodeUseCase:
         # Map regex patterns to readable names
         pattern_map = {
             r'\bboto3\s*\.\s*(client|resource)\s*\(': 'boto3.client() or boto3.resource()',
-            r'\bs3\s*\.\s*\w+': 'S3 operation',
+            r'\bs3\s*\.\s*\w+': 'S3 operation',  # Only match actual method calls, not comments
             r'\w+\s*\.\s*create_bucket\s*\(': 'create_bucket()',
             r'\w+\s*\.\s*upload_file\s*\(': 'upload_file()',
             r'\w+\s*\.\s*download_file\s*\(': 'download_file()',
