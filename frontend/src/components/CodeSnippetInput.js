@@ -95,7 +95,6 @@ const CodeSnippetInput = ({
             <MenuItem value="python">Python</MenuItem>
             <MenuItem value="java">Java</MenuItem>
             <MenuItem value="csharp">C# (.NET)</MenuItem>
-            <MenuItem value="c#">C# (.NET)</MenuItem>
           </Select>
         </FormControl>
 
