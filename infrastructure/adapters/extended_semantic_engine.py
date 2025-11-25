@@ -4272,14 +4272,34 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         # Replace AWS SDK imports with GCS imports
         code = re.sub(
             r'import com\.amazonaws\.services\.s3\..*;',
-            'import com.google.cloud.storage.*;',
+            'import com.google.cloud.storage.Storage;\nimport com.google.cloud.storage.StorageOptions;\nimport com.google.cloud.storage.BlobId;\nimport com.google.cloud.storage.BlobInfo;',
+            code
+        )
+        
+        # Replace S3 client type declarations
+        code = re.sub(
+            r'AmazonS3\s+(\w+)\s*=',
+            r'Storage \1 =',
+            code
+        )
+        
+        code = re.sub(
+            r'private\s+AmazonS3\s+(\w+);',
+            r'private Storage \1;',
             code
         )
         
         # Replace S3 client instantiation
         code = re.sub(
-            r'S3Client\.builder\(\).build\(\)',
+            r'AmazonS3ClientBuilder\.standard\(\)[^;]*\.build\(\)',
             'StorageOptions.getDefaultInstance().getService()',
+            code
+        )
+        
+        # Replace putObject calls
+        code = re.sub(
+            r'(\w+)\.putObject\(([^)]+)\)',
+            r'\1.create(BlobInfo.newBuilder(BlobId.of(\2)).build())',
             code
         )
         
@@ -4290,9 +4310,31 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         # Replace Lambda imports
         code = re.sub(
             r'import com\.amazonaws\.services\.lambda\..*;',
-            'import com.google.cloud.functions.*;',
+            'import com.google.cloud.functions.HttpFunction;\nimport com.google.cloud.functions.HttpRequest;\nimport com.google.cloud.functions.HttpResponse;',
             code
         )
+        
+        # Replace RequestHandler interface
+        code = re.sub(
+            r'implements\s+RequestHandler<[^>]+>',
+            'implements HttpFunction',
+            code
+        )
+        
+        # Replace handleRequest method - preserve class structure
+        code = re.sub(
+            r'public\s+([^\(]+)\s+handleRequest\s*\(\s*([^,]+)\s+input\s*,\s*Context\s+context\s*\)',
+            r'@Override\n    public void service(HttpRequest request, HttpResponse response) throws Exception',
+            code
+        )
+        
+        # Update method body to use request/response
+        if 'return Map.of(' in code:
+            code = re.sub(
+                r'return\s+Map\.of\("statusCode",\s*(\d+),\s*"body",\s*"([^"]+)"\);',
+                r'response.setStatusCode(\1);\n        response.getWriter().write("\2");',
+                code
+            )
         
         return code
     
@@ -4301,7 +4343,34 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         # Replace DynamoDB imports
         code = re.sub(
             r'import com\.amazonaws\.services\.dynamodbv2\..*;',
-            'import com.google.cloud.firestore.*;',
+            'import com.google.cloud.firestore.Firestore;\nimport com.google.cloud.firestore.FirestoreOptions;\nimport com.google.cloud.firestore.DocumentReference;\nimport com.google.cloud.firestore.WriteBatch;',
+            code
+        )
+        
+        # Replace DynamoDB client type declarations
+        code = re.sub(
+            r'AmazonDynamoDB\s+(\w+)\s*=',
+            r'Firestore \1 =',
+            code
+        )
+        
+        code = re.sub(
+            r'private\s+AmazonDynamoDB\s+(\w+);',
+            r'private Firestore \1;',
+            code
+        )
+        
+        # Replace DynamoDB client instantiation
+        code = re.sub(
+            r'AmazonDynamoDBClientBuilder\.standard\(\)[^;]*\.build\(\)',
+            'FirestoreOptions.getDefaultInstance().getService()',
+            code
+        )
+        
+        # Replace putItem calls
+        code = re.sub(
+            r'(\w+)\.putItem\(([^)]+)\)',
+            r'\1.collection(tableName).document().set(item)',
             code
         )
         
