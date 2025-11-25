@@ -258,7 +258,7 @@ python3 test_migration_direct.py
 - ✅ SQS (send/receive messages)
 - ✅ SNS (publish messages)
 - ✅ Multi-service migrations
-- ✅ Java code migrations
+- ✅ Java code migrations (uses Gemini API for intelligent transformations)
 
 **Unit Tests:**
 ```bash
