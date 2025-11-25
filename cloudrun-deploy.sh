@@ -79,7 +79,7 @@ gcloud run deploy ${SERVICE_NAME} \
     --image ${IMAGE_NAME}:latest \
     --platform managed \
     --region ${REGION} \
-    --no-allow-unauthenticated \
+    --allow-unauthenticated \
     --memory 2Gi \
     --cpu 2 \
     --timeout 300 \
@@ -87,6 +87,14 @@ gcloud run deploy ${SERVICE_NAME} \
     --min-instances 0 \
     --set-env-vars "${ENV_VARS}" \
     --service-account ${SERVICE_ACCOUNT_EMAIL}
+
+# Ensure public access is maintained (allow allUsers)
+echo -e "${YELLOW}Ensuring public access...${NC}"
+gcloud run services add-iam-policy-binding ${SERVICE_NAME} \
+    --region ${REGION} \
+    --member "allUsers" \
+    --role "roles/run.invoker" \
+    --quiet || echo -e "${YELLOW}Public access already configured${NC}"
 
 # Get the service URL
 SERVICE_URL=$(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format 'value(status.url)')
