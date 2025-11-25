@@ -124,7 +124,15 @@ class ExecuteRepositoryMigrationUseCase:
                     print(f"Read {len(original_content)} characters from {file_path}")
                     
                     # Determine language
-                    language = 'python' if file_path.endswith('.py') else 'java'
+                    # Detect language from file extension
+                    if file_path.endswith('.py'):
+                        language = 'python'
+                    elif file_path.endswith('.java'):
+                        language = 'java'
+                    elif file_path.endswith(('.cs', '.csx')):
+                        language = 'csharp'
+                    else:
+                        language = 'python'  # Default fallback
                     print(f"Detected language: {language}")
                     
                     # Apply refactoring for each service

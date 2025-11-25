@@ -134,7 +134,7 @@ class ValidateGCPCodeUseCase:
     def validate(
         self, 
         code: str, 
-        language: str = 'python',
+        language: str = 'python',  # Supports: python, java, csharp, c#
         progress_callback: Optional[Callable[[str, float], None]] = None
     ) -> ValidationResult:
         """
@@ -142,7 +142,7 @@ class ValidateGCPCodeUseCase:
         
         Args:
             code: Code to validate
-            language: Programming language ('python' or 'java')
+            language: Programming language ('python', 'java', 'csharp', or 'c#')
             progress_callback: Optional callback for progress updates (message, percentage)
             
         Returns:
