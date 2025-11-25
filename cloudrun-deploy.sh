@@ -71,14 +71,7 @@ fi
 
 # Build and push using Cloud Build (ensures correct architecture for Cloud Run)
 echo -e "${YELLOW}Building Docker image with Cloud Build...${NC}"
-gcloud builds submit --tag ${IMAGE_NAME}:latest --timeout=20m --config <(cat <<EOF
-steps:
-  - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-f', 'Dockerfile.cloudrun', '-t', '${IMAGE_NAME}:latest', '.']
-images:
-  - '${IMAGE_NAME}:latest'
-EOF
-)
+gcloud builds submit --tag ${IMAGE_NAME}:latest --timeout=20m
 
 # Deploy to Cloud Run
 echo -e "${YELLOW}Deploying to Cloud Run...${NC}"
