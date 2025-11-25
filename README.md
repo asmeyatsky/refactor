@@ -147,44 +147,55 @@ cd frontend && npm start
 Visit http://localhost:3000 for the step-by-step migration wizard:
 1. **Select Cloud Provider** (AWS or Azure)
 2. **Choose Input Method** (Code Snippet or Repository)
-3. **Provide Code/Repository** (paste code or import Git repo)
-4. **Review & Migrate** (see results and create PR)
+3. **Select Language** (Python, Java, or C# (.NET))
+4. **Provide Code/Repository** (paste code or import Git repo)
+5. **Select Services** (choose which AWS/Azure services to migrate)
+6. **Review & Migrate** (see results and create PR)
 
 ### Repository-Level Migration 🆕
 
-Migrate entire Git repositories via CLI:
+Migrate entire Git repositories via CLI (supports Python, Java, and C# files):
 
 ```bash
-# Analyze repository and generate MAR
+# Analyze repository and generate MAR (auto-detects languages)
 python main.py repo analyze https://github.com/user/repo.git --branch main --token YOUR_TOKEN
 
-# Execute migration
+# Execute migration (migrates all detected languages)
 python main.py repo migrate <repository_id> --create-pr --run-tests
 
 # List analyzed repositories
 python main.py repo list
 ```
 
-Or programmatically:
+**Language Detection**: The tool automatically detects:
+- `.py` files → Python
+- `.java` files → Java
+- `.cs` and `.csx` files → C# (.NET)
+
+Or programmatically (supports Python, Java, and C#):
 
 ```python
 from application.use_cases.analyze_repository_use_case import AnalyzeRepositoryUseCase
 from application.use_cases.execute_repository_migration_use_case import ExecuteRepositoryMigrationUseCase
 
-# Analyze repository
+# Analyze repository (auto-detects Python, Java, C# files)
 analyze_uc = AnalyzeRepositoryUseCase()
 result = analyze_uc.execute(
     repository_url="https://github.com/user/repo.git",
     branch="main"
 )
 
-# Execute migration
+# Execute migration (migrates all detected languages)
 migrate_uc = ExecuteRepositoryMigrationUseCase()
 migration_result = migrate_uc.execute(
     repository_id=result['repository_id'],
     mar=result['mar'],
     run_tests=True
 )
+
+# The MAR includes detected languages:
+print(f"Languages detected: {result['mar'].languages_detected}")
+# Example output: ['python', 'java', 'csharp']
 ```
 
 ### Multi-Service Migration
@@ -196,22 +207,29 @@ from domain.entities.codebase import ProgrammingLanguage
 # Create the multi-service migration system
 orchestrator = create_multi_service_migration_system()
 
-# Execute a migration with auto-detection
+# Python - Execute a migration with auto-detection
 result = orchestrator.execute_migration(
-    codebase_path="/path/to/your/codebase",
+    codebase_path="/path/to/your/python/codebase",
     language=ProgrammingLanguage.PYTHON
+)
+
+# Java - Migrate Java codebase
+result = orchestrator.execute_migration(
+    codebase_path="/path/to/your/java/codebase",
+    language=ProgrammingLanguage.JAVA,
+    services_to_migrate=["s3", "lambda", "dynamodb"]
+)
+
+# C# (.NET) - Migrate C# codebase
+result = orchestrator.execute_migration(
+    codebase_path="/path/to/your/csharp/codebase",
+    language=ProgrammingLanguage.CSHARP,
+    services_to_migrate=["s3", "lambda", "dynamodb"]
 )
 
 print(f"Migration completed: {result['migration_id']}")
 print(f"Success: {result['verification_result']['success']}")
 print(f"Services migrated: {result['services_migrated']}")
-
-# Or migrate specific services
-result = orchestrator.execute_migration(
-    codebase_path="/path/to/your/codebase",
-    language=ProgrammingLanguage.PYTHON,
-    services_to_migrate=["s3", "lambda", "dynamodb"]
-)
 ```
 
 ### Using Individual Components
@@ -227,7 +245,14 @@ init_use_case = InitializeCodebaseUseCase(
     code_analyzer=CodeAnalyzerAdapter()
 )
 
-codebase = init_use_case.execute("/path/to/codebase", ProgrammingLanguage.PYTHON)
+# Python codebase
+codebase = init_use_case.execute("/path/to/python/codebase", ProgrammingLanguage.PYTHON)
+
+# Java codebase
+codebase = init_use_case.execute("/path/to/java/codebase", ProgrammingLanguage.JAVA)
+
+# C# codebase
+codebase = init_use_case.execute("/path/to/csharp/codebase", ProgrammingLanguage.CSHARP)
 
 # Analyze the codebase for all AWS service usage
 from application.use_cases import AnalyzeCodebaseUseCase
@@ -265,14 +290,24 @@ python main.py repo list
 ### File/Codebase-Level Migration
 
 ```bash
-# Auto-detect and migrate all supported services
+# Python - Auto-detect and migrate all supported services
 python main.py local /path/to/codebase --language python
 
-# Migrate specific services only
+# Python - Migrate specific services only
 python main.py local /path/to/codebase \
   --language python \
   --services s3 lambda dynamodb \
   --verbose
+
+# Java - Migrate Java codebase
+python main.py local /path/to/java/project \
+  --language java \
+  --services s3 lambda dynamodb
+
+# C# (.NET) - Migrate C# codebase
+python main.py local /path/to/csharp/project \
+  --language csharp \
+  --services s3 lambda dynamodb
 ```
 
 ## Testing
@@ -286,25 +321,29 @@ The project includes comprehensive test suites for all AWS services:
 # Start API server first
 python3 api_server.py
 
-# Run comprehensive AWS tests (Python and Java)
+# Run comprehensive AWS tests (Python, Java, C#)
 python3 test_aws_comprehensive.py
 ```
 
-**Direct Function Testing:**
+**Language-Specific Testing:**
 ```bash
-# Test migration functions directly (no API server required)
+# Python migrations
+python3 test_aws_comprehensive.py
+
+# Java migrations
+python3 test_java_migrations.py
+
+# C# migrations
+python3 test_csharp_migrations.py
+
+# Direct function testing (no API server required)
 python3 test_migration_direct.py
 ```
 
 **Test Coverage:**
-- ✅ S3 (basic operations, presigned URLs)
-- ✅ Lambda (handlers, S3 integration)
-- ✅ DynamoDB (basic operations, migration scripts)
-- ✅ SQS (send/receive messages)
-- ✅ SNS (publish messages)
-- ✅ Multi-service migrations
-- ✅ Java code migrations (uses Gemini API for intelligent transformations)
-- ✅ C# (.NET) code migrations (uses Gemini API for intelligent transformations)
+- ✅ **Python**: S3, Lambda, DynamoDB, SQS, SNS, Multi-service migrations
+- ✅ **Java**: S3, Lambda, DynamoDB (uses Gemini API for intelligent transformations)
+- ✅ **C# (.NET)**: S3, Lambda, DynamoDB, SQS, SNS, Multi-service migrations (uses Gemini API for intelligent transformations)
 
 **Unit Tests:**
 ```bash
