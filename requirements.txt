@@ -46,3 +46,14 @@ PyPDF2>=3.0.1
 
 # YAML parsing (for IaC files)
 PyYAML>=6.0.1
+
+# Production server
+gunicorn>=21.2.0
+
+# Authentication
+google-auth>=2.23.0
+google-auth-oauthlib>=1.1.0
+google-auth-httplib2>=0.1.1
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+PyJWT>=2.8.0

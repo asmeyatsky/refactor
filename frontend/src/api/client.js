@@ -1,7 +1,9 @@
 // API client for the Cloud Refactor Agent backend
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+// Use relative URLs by default (works for both dev and production)
+// Set REACT_APP_API_BASE_URL environment variable to override (e.g., for local dev)
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -68,7 +70,7 @@ export const migrateRepository = async ({ repositoryId, services, createPR = fal
 export const getMigrationStatus = async (migrationId) => {
   try {
     // Use a longer timeout for status polling since refactoring can take time
-    const response = await axios.get(`${API_BASE_URL}/api/migration/${migrationId}`, {
+    const response = await apiClient.get(`/api/migration/${migrationId}`, {
       timeout: 10000, // 10 seconds per poll request
     });
     return response.data;

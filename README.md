@@ -23,6 +23,8 @@ The Universal Cloud Refactor Agent is an autonomous system designed to automate 
 - **S3 to Cloud Storage**: Object Storage
 - **Lambda to Cloud Functions/Cloud Run**: Serverless Compute
 - **DynamoDB to Firestore/Bigtable**: NoSQL Database
+  - **Smart Migration Detection**: Automatically detects migration scripts (reads from DynamoDB, writes to Firestore) and preserves boto3 for reading operations
+  - **Application Code Migration**: Fully converts DynamoDB code to Firestore for application code
 - **SQS to Pub/Sub**: Message Queuing
 - **SNS to Pub/Sub**: Notification Service
 - **RDS to Cloud SQL**: Relational Database
@@ -230,11 +232,47 @@ python main.py local /path/to/codebase \
 
 ## Testing
 
-Run the complete test suite:
+### Comprehensive Test Suites
 
+The project includes comprehensive test suites for all AWS services:
+
+**API-Based Testing:**
+```bash
+# Start API server first
+python3 api_server.py
+
+# Run comprehensive AWS tests (Python and Java)
+python3 test_aws_comprehensive.py
+```
+
+**Direct Function Testing:**
+```bash
+# Test migration functions directly (no API server required)
+python3 test_migration_direct.py
+```
+
+**Test Coverage:**
+- ✅ S3 (basic operations, presigned URLs)
+- ✅ Lambda (handlers, S3 integration)
+- ✅ DynamoDB (basic operations, migration scripts)
+- ✅ SQS (send/receive messages)
+- ✅ SNS (publish messages)
+- ✅ Multi-service migrations
+- ✅ Java code migrations
+
+**Unit Tests:**
 ```bash
 python -m unittest discover tests/
 ```
+
+### DynamoDB Migration Script Detection
+
+The tool automatically detects migration scripts vs application code:
+
+- **Migration Scripts**: Preserves boto3 for reading from DynamoDB, converts writes to Firestore
+- **Application Code**: Fully converts all DynamoDB code to Firestore
+
+See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for detailed examples.
 
 ## Design Decisions
 

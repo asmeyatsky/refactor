@@ -1,0 +1,60 @@
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: cloud-refactor-agent
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/execution-environment: gen2
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: "1"
+        autoscaling.knative.dev/maxScale: "10"
+        run.googleapis.com/cpu-throttling: "false"
+        run.googleapis.com/execution-environment: gen2
+    spec:
+      containerConcurrency: 80
+      timeoutSeconds: 300
+      serviceAccountName: cloud-refactor-agent@refactord-479213.iam.gserviceaccount.com
+      containers:
+      - image: gcr.io/refactord-479213/cloud-refactor-agent:latest
+        ports:
+        - name: http1
+          containerPort: 8080
+        env:
+        - name: PORT
+          value: "8080"
+        - name: REQUIRE_AUTH
+          value: "true"
+        - name: ALLOWED_EMAIL_DOMAINS
+          value: "@searce.com"
+        - name: USE_CLOUD_RUN_IAM
+          value: "true"
+        - name: GCP_PROJECT_ID
+          value: "refactord-479213"
+        - name: GCP_REGION
+          value: "asia-south1"
+        resources:
+          limits:
+            cpu: "2"
+            memory: 2Gi
+        startupProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 0
+          timeoutSeconds: 240
+          periodSeconds: 240
+          failureThreshold: 1
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 8080
+          initialDelaySeconds: 0
+          timeoutSeconds: 1
+          periodSeconds: 3
+          failureThreshold: 3
+  traffic:
+  - percent: 100
+    latestRevision: true

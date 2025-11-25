@@ -43,9 +43,89 @@ class AzureExtendedASTTransformationEngine:
         
         # Validate syntax and AWS/Azure references for Python code
         if language == 'python':
+            # Apply aggressive Azure cleanup to remove any remaining Azure patterns
+            transformed_code = self._aggressive_azure_cleanup(transformed_code)
             transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
         
         return transformed_code
+    
+    def _aggressive_azure_cleanup(self, code: str) -> str:
+        """
+        AGGRESSIVE Azure cleanup that removes ALL Azure patterns.
+        This ensures zero Azure references in output code.
+        """
+        result = code
+        
+        # STEP 1: Replace ALL Azure imports
+        result = re.sub(r'from azure\.storage\.blob import.*', 'from google.cloud import storage', result)
+        result = re.sub(r'import azure\.storage\.blob', 'from google.cloud import storage', result)
+        result = re.sub(r'from azure\.functions import.*', 'from google.cloud import functions', result)
+        result = re.sub(r'import azure\.functions', 'from google.cloud import functions', result)
+        result = re.sub(r'from azure\.cosmos import.*', 'from google.cloud import firestore', result)
+        result = re.sub(r'import azure\.cosmos', 'from google.cloud import firestore', result)
+        result = re.sub(r'from azure\.servicebus import.*', 'from google.cloud import pubsub_v1', result)
+        result = re.sub(r'import azure\.servicebus', 'from google.cloud import pubsub_v1', result)
+        result = re.sub(r'from azure\.eventhub import.*', 'from google.cloud import pubsub_v1', result)
+        result = re.sub(r'import azure\.eventhub', 'from google.cloud import pubsub_v1', result)
+        
+        # STEP 2: Replace ALL Azure client instantiations
+        result = re.sub(
+            r'(\w+)\s*=\s*BlobServiceClient\.[^)]+\)',
+            r'\1 = storage.Client()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*CosmosClient\s*\([^)]+\)',
+            r'\1 = firestore.Client()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*ServiceBusClient\.[^)]+\)',
+            r'\1 = pubsub_v1.PublisherClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*EventHubProducerClient\s*\([^)]+\)',
+            r'\1 = pubsub_v1.PublisherClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        
+        # STEP 3: Replace Azure environment variables
+        result = re.sub(r'AZURE_STORAGE_CONTAINER', 'GCS_BUCKET_NAME', result)
+        result = re.sub(r'AZURE_STORAGE_CONNECTION_STRING', 'GOOGLE_APPLICATION_CREDENTIALS', result)
+        result = re.sub(r'AZURE_COSMOS_ENDPOINT', 'GCP_PROJECT_ID', result)
+        result = re.sub(r'AZURE_COSMOS_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', result)
+        result = re.sub(r'AZURE_SERVICE_BUS_CONNECTION_STRING', 'GCP_PROJECT_ID', result)
+        result = re.sub(r'AZURE_SERVICE_BUS_QUEUE_NAME', 'GCP_PUBSUB_TOPIC_ID', result)
+        result = re.sub(r'AZURE_FUNCTION_NAME', 'GCP_CLOUD_FUNCTION_NAME', result)
+        result = re.sub(r'AZURE_CLIENT_ID', 'GCP_PROJECT_ID', result)
+        result = re.sub(r'AZURE_CLIENT_SECRET', 'GOOGLE_APPLICATION_CREDENTIALS', result)
+        result = re.sub(r'AZURE_LOCATION', 'GCP_REGION', result)
+        
+        # STEP 4: Replace Azure-specific patterns
+        result = re.sub(r'\bBlobServiceClient\b', 'storage.Client', result)
+        result = re.sub(r'\bBlobClient\b', 'blob', result)
+        result = re.sub(r'\bContainerClient\b', 'bucket', result)
+        result = re.sub(r'\bCosmosClient\b', 'firestore.Client', result)
+        result = re.sub(r'\bServiceBusClient\b', 'pubsub_v1.PublisherClient', result)
+        result = re.sub(r'\bEventHubProducerClient\b', 'pubsub_v1.PublisherClient', result)
+        
+        # STEP 5: Replace Azure method calls
+        result = re.sub(r'\.upload_blob\(', '.upload_from_string(', result)
+        result = re.sub(r'\.download_blob\(', '.download_as_text(', result)
+        result = re.sub(r'\.get_blob_client\(', '.blob(', result)
+        result = re.sub(r'\.get_container_client\(', '.bucket(', result)
+        
+        # STEP 6: Replace Azure Functions patterns
+        result = re.sub(r'func\.HttpRequest', 'functions.HttpRequest', result)
+        result = re.sub(r'func\.HttpResponse', 'functions.HttpResponse', result)
+        result = re.sub(r'azure\.functions', 'google.cloud.functions', result)
+        
+        return result
     
     def _validate_and_fix_syntax(self, code: str, original_code: str = None) -> str:
         """
@@ -961,6 +1041,70 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
     
     def _migrate_aws_dynamodb_to_firestore(self, code: str) -> str:
         """Migrate AWS DynamoDB to Google Cloud Firestore"""
+        # Detect if this is a migration script (reads from DynamoDB, writes to Firestore)
+        is_migration_script = (
+            re.search(r'\.(scan|get_item|query)\(', code, re.IGNORECASE) and
+            re.search(r'\.(put_item|batch_write_item)\(', code, re.IGNORECASE)
+        )
+        
+        if is_migration_script:
+            # MIGRATION SCRIPT MODE: Preserve DynamoDB read operations, replace write operations
+            # Ensure boto3 import is present (for reading from DynamoDB)
+            if 'import boto3' not in code:
+                code = 'import boto3\n' + code
+            
+            # Ensure Firestore imports are present (for writing to Firestore)
+            if 'from google.cloud import firestore' not in code:
+                if 'import firebase_admin' not in code:
+                    code = 'import firebase_admin\nfrom firebase_admin import credentials, firestore\nfrom decimal import Decimal\n' + code
+                elif 'from firebase_admin import' not in code:
+                    code = code.replace('import firebase_admin', 'import firebase_admin\nfrom firebase_admin import credentials, firestore\nfrom decimal import Decimal')
+            
+            # Preserve DynamoDB resource/client initialization (for reading)
+            # Add Firestore client initialization (for writing)
+            init_pattern = r'(\w+)\s*=\s*boto3\.(resource|client)\([\'\"]dynamodb[\'\"][^\)]*\)'
+            def add_firestore_init(match):
+                return match.group(0) + f'\n\n# Initialize Firestore for writing\nif not firebase_admin._apps:\n    cred = credentials.Certificate(GOOGLE_KEY_PATH)\n    firebase_admin.initialize_app(cred)\n\nfirestore_db = firestore.Client()'
+            code = re.sub(init_pattern, add_firestore_init, code, count=1)
+            
+            # Replace write operations only: put_item() -> Firestore set()
+            def replace_put_item(match):
+                item = match.group(2)
+                return f'# Write to Firestore\n    doc_ref = firestore_db.collection(FIRESTORE_COLLECTION).document()\n    doc_ref.set({item})'
+            
+            code = re.sub(
+                r'(\w+)\.put_item\(\s*Item\s*=\s*([^\)]+)\)',
+                replace_put_item,
+                code,
+                flags=re.DOTALL
+            )
+            
+            # Replace batch_write_item() -> Firestore batch operations
+            def replace_batch_write(match):
+                return '''# Convert DynamoDB batch write to Firestore batch
+    batch = firestore_db.batch()
+    collection_ref = firestore_db.collection(FIRESTORE_COLLECTION)
+    for item in items:
+        clean_item = convert_decimal(item)  # Convert Decimal types
+        doc_id = clean_item.get(PRIMARY_KEY_FIELD, None)
+        if doc_id:
+            doc_ref = collection_ref.document(str(doc_id))
+        else:
+            doc_ref = collection_ref.document()
+        batch.set(doc_ref, clean_item)
+    batch.commit()'''
+            
+            code = re.sub(
+                r'(\w+)\.batch_write_item\(\s*RequestItems\s*=\s*\{[^}]+\}\s*\)',
+                replace_batch_write,
+                code,
+                flags=re.DOTALL
+            )
+            
+            # Keep scan(), get_item(), query() operations as DynamoDB operations
+            return code
+        
+        # APPLICATION CODE MODE: Replace all DynamoDB with Firestore
         # Replace DynamoDB imports
         code = re.sub(r'^import boto3\s*$', 'from google.cloud import firestore', code, flags=re.MULTILINE)
         code = re.sub(r'^from boto3', 'from google.cloud import firestore', code, flags=re.MULTILINE)

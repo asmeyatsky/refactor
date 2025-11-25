@@ -30,7 +30,7 @@ class Config:
     GEMINI_API_KEY: Optional[str] = os.getenv("GEMINI_API_KEY")
     
     # Google Cloud Configuration
-    GCP_PROJECT_ID: str = os.getenv("GCP_PROJECT_ID", "mediahouse-478804")
+    GCP_PROJECT_ID: str = os.getenv("GCP_PROJECT_ID", "refactord-479213")
     GCP_REGION: str = os.getenv("GCP_REGION", "asia-south1")  # Mumbai
     
     # Test Runner Configuration

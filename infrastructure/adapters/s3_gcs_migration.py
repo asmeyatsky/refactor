@@ -178,10 +178,23 @@ class MultiServiceMigrationOrchestrator:
 
     def _create_refactoring_engine(self, services_to_migrate: List[str] = None) -> MultiServiceRefactoringEngineAgent:
         """Dynamically creates the refactoring engine based on the services to migrate."""
-        aws_services = {"s3", "lambda", "dynamodb"}
-        is_aws = any(service in aws_services for service in (services_to_migrate or []))
-
-        chosen_engine = self.extended_semantic_engine if is_aws else self.azure_extended_semantic_engine
+        # AWS services
+        aws_services = {"s3", "lambda", "dynamodb", "sqs", "sns", "rds", "ec2", "iam", 
+                        "cloudwatch", "apigateway", "elasticache", "eks", "fargate"}
+        # Azure services
+        azure_services = {"blob_storage", "functions", "cosmos_db", "service_bus", 
+                          "event_hubs", "sql_database", "virtual_machines", "monitor",
+                          "api_management", "redis_cache", "aks", "container_instances", "app_service"}
+        
+        services_list = services_to_migrate or []
+        is_aws = any(service.lower() in aws_services for service in services_list)
+        is_azure = any(service.lower() in azure_services for service in services_list)
+        
+        # Default to AWS engine if mixed or unclear, but prefer Azure if only Azure services
+        if is_azure and not is_aws:
+            chosen_engine = self.azure_extended_semantic_engine
+        else:
+            chosen_engine = self.extended_semantic_engine
         
         refactoring_service = RefactoringDomainService(
             code_analyzer=CodeAnalyzerAdapter(),

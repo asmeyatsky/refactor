@@ -39,7 +39,7 @@ class ValidateGCPCodeUseCase:
         's3.download_file', 's3.list_objects', 'ResponseMetadata',
         'LocationConstraint', 'ACL', 'CreateBucketConfiguration',
         's3_client', 's3_bucket', 's3_key', 's3_object',
-        'Bucket=', 'Key=', 'QueueUrl=', 'TopicArn=', 'TableName=',
+        'Bucket=', 'Key=', 'QueueUrl=', 'TopicArn=',
         'FunctionName=', 'InvocationType=', 'Payload=', 'Region=',
         'aws_access_key', 'aws_secret', 'AWS_ACCESS_KEY', 'AWS_SECRET',
         'amazonaws.com', '.s3.', 's3://', 'S3Manager', 'S3Client',
@@ -49,7 +49,19 @@ class ValidateGCPCodeUseCase:
         'record_event["s3"]', 'get_object', 'batch_write_item',
         'send_message', 'QueueUrl', 'TopicArn', 'RequestItems',
         'PutRequest', 'Item=', 'MessageBody=', 'Message=',
-        'boto3.client', 'boto3.resource', 'boto3.Session'
+        'boto3.client', 'boto3.resource', 'boto3.Session',
+        # ECS/Fargate patterns
+        'fargate', 'Fargate', 'FARGATE', 'ecs', 'ECS',
+        'run_task', 'register_task_definition', 'start_task',
+        'list_tasks', 'describe_tasks', 'stop_task',
+        'taskDefinition', 'taskDefinitionArn', 'cluster',
+        'containerDefinitions', 'family', 'taskArn',
+        # RDS patterns
+        'rds_client', 'rds.Client', 'boto3.client(\'rds\'',
+        'create_db_instance', 'delete_db_instance', 'describe_db_instances',
+        'modify_db_instance', 'DBInstanceIdentifier', 'DBInstanceClass',
+        'Engine', 'MasterUsername', 'MasterUserPassword', 'AllocatedStorage',
+        'RDS_ENDPOINT', 'RDS_HOST', 'RDS_DB_NAME', 'RDS_USERNAME', 'RDS_PASSWORD'
     ]
     
     # Azure patterns to detect
@@ -87,6 +99,28 @@ class ValidateGCPCodeUseCase:
         r'lambda_handler\s*\(',
         r'event\s*\[\s*[\'"]Records[\'"]\s*\]',
         r'record_event\s*\[\s*[\'"]s3[\'"]\s*\]',
+        # ECS/Fargate patterns
+        r'\w+\s*\.\s*run_task\s*\(',
+        r'\w+\s*\.\s*register_task_definition\s*\(',
+        r'\w+\s*\.\s*start_task\s*\(',
+        r'\w+\s*\.\s*list_tasks\s*\(',
+        r'\w+\s*\.\s*describe_tasks\s*\(',
+        r'\w+\s*\.\s*stop_task\s*\(',
+        r'\bfargate\b',
+        r'\bFargate\b',
+        r'\bFARGATE\b',
+        r'\becs\s*\.\s*client',
+        # RDS patterns
+        r'\brds\s*\.\s*client',
+        r'\brds_client\b',
+        r'\w+\s*\.\s*create_db_instance\s*\(',
+        r'\w+\s*\.\s*delete_db_instance\s*\(',
+        r'\w+\s*\.\s*describe_db_instances\s*\(',
+        r'\w+\s*\.\s*modify_db_instance\s*\(',
+        r'\bDBInstanceIdentifier\b',
+        r'\bDBInstanceClass\b',
+        r'\bRDS_ENDPOINT\b',
+        r'\bRDS_HOST\b',
     ]
     
     def __init__(self, llm_provider: Optional[Any] = None):
@@ -140,21 +174,39 @@ class ValidateGCPCodeUseCase:
             warnings.append("Code may not be fully migrated to GCP")
         
         # Step 3: Check for Azure patterns (60%)
-        azure_patterns_found = self._detect_azure_patterns(code)
-        if progress_callback:
-            progress_callback(f"Found {len(azure_patterns_found)} Azure patterns", 60.0)
-        
-        if azure_patterns_found:
-            errors.append(f"Found {len(azure_patterns_found)} Azure patterns in code")
-            warnings.append("Code may not be fully migrated to GCP")
+        # Only check Azure patterns if no AWS patterns were found
+        # This prevents false positives when validating AWS service migrations
+        azure_patterns_found = []
+        if not aws_patterns_found:
+            azure_patterns_found = self._detect_azure_patterns(code)
+            if progress_callback:
+                progress_callback(f"Found {len(azure_patterns_found)} Azure patterns", 60.0)
+            
+            if azure_patterns_found:
+                errors.append(f"Found {len(azure_patterns_found)} Azure patterns in code")
+                warnings.append("Code may not be fully migrated to GCP")
+        else:
+            # Skip Azure check if AWS patterns found (likely AWS migration)
+            if progress_callback:
+                progress_callback("Skipping Azure pattern check (AWS patterns detected)", 60.0)
         
         # Step 4: Check GCP API correctness (80%)
         gcp_api_correct = self._validate_gcp_apis(code, language)
         if progress_callback:
             progress_callback("GCP API validation complete", 80.0)
         
-        if not gcp_api_correct:
-            warnings.append("GCP API usage may be incorrect or incomplete")
+        # Only warn about GCP API if:
+        # 1. We found AWS/Azure patterns (meaning migration was attempted)
+        # 2. AND GCP APIs are not detected
+        # This prevents false positives for code that doesn't use cloud services
+        if not gcp_api_correct and (aws_patterns_found or azure_patterns_found):
+            # Check if code actually uses cloud services (not just simple Python code)
+            has_cloud_operations = any(pattern in code.lower() for pattern in [
+                'client', 'bucket', 'blob', 'collection', 'document', 'topic', 
+                'subscription', 'function', 'service', 'instance', 'cluster'
+            ])
+            if has_cloud_operations:
+                warnings.append("GCP API usage may be incorrect or incomplete - verify GCP SDK imports and client initialization")
         
         # Step 5: Advanced LLM validation if available (100%)
         if self.llm_provider and (aws_patterns_found or azure_patterns_found):
@@ -188,18 +240,35 @@ class ValidateGCPCodeUseCase:
     
     def _validate_syntax(self, code: str, language: str) -> bool:
         """Validate code syntax"""
+        if not code or not code.strip():
+            # Empty code is syntactically valid (though may not be useful)
+            return True
+            
         try:
             if language == 'python':
-                ast.parse(code)
-                return True
+                # Try to parse the code
+                try:
+                    ast.parse(code)
+                    return True
+                except SyntaxError as e:
+                    logger.error(f"Syntax error: {e} at line {e.lineno}")
+                    return False
+                except Exception as e:
+                    logger.error(f"AST parsing error: {e}")
+                    return False
             elif language == 'java':
                 # Basic Java syntax check - could be enhanced
                 # For now, just check for basic structure
-                return '{' in code and '}' in code
+                # Check for balanced braces and basic structure
+                if '{' not in code or '}' not in code:
+                    return False
+                # Check for balanced braces
+                open_braces = code.count('{')
+                close_braces = code.count('}')
+                if open_braces != close_braces:
+                    return False
+                return True
             return True
-        except SyntaxError as e:
-            logger.error(f"Syntax error: {e}")
-            return False
         except Exception as e:
             logger.error(f"Syntax validation error: {e}")
             return False
@@ -209,18 +278,84 @@ class ValidateGCPCodeUseCase:
         found_patterns = []
         code_lower = code.lower()
         
-        # Check literal patterns
+        # Check literal patterns - be more precise to avoid false positives
         for pattern in self.AWS_PATTERNS:
-            if pattern.lower() in code_lower or pattern in code:
-                found_patterns.append(pattern)
+            pattern_lower = pattern.lower()
+            if pattern_lower in code_lower:
+                # Skip common false positives that might appear in GCP code
+                # These patterns are too generic and might match legitimate GCP code
+                false_positives = [
+                    'region=',     # Too generic - GCP uses regions too
+                    'functionname=',  # Too generic
+                    'engine',      # Too generic - Cloud SQL uses engine too
+                ]
+                
+                # Only add if not a false positive
+                if pattern_lower not in false_positives:
+                    found_patterns.append(pattern)
         
-        # Check regex patterns
+        # Check regex patterns - these are more precise
         for pattern in self.AWS_METHOD_PATTERNS:
             matches = re.findall(pattern, code, re.IGNORECASE)
             if matches:
-                found_patterns.extend([f"Pattern: {pattern}" for _ in matches])
+                # Extract meaningful pattern name from regex
+                pattern_name = self._extract_pattern_name(pattern, matches[0] if matches else None)
+                if pattern_name and pattern_name not in found_patterns:
+                    found_patterns.append(pattern_name)
         
         return list(set(found_patterns))  # Remove duplicates
+    
+    def _extract_pattern_name(self, regex_pattern: str, match: str = None) -> str:
+        """Extract a human-readable pattern name from regex"""
+        # Map regex patterns to readable names
+        pattern_map = {
+            r'\bboto3\s*\.\s*(client|resource)\s*\(': 'boto3.client() or boto3.resource()',
+            r'\bs3\s*\.\s*\w+': 'S3 operation',
+            r'\w+\s*\.\s*create_bucket\s*\(': 'create_bucket()',
+            r'\w+\s*\.\s*upload_file\s*\(': 'upload_file()',
+            r'\w+\s*\.\s*download_file\s*\(': 'download_file()',
+            r'\w+\s*\.\s*list_objects': 'list_objects()',
+            r'\w+\s*\.\s*delete_object\s*\(': 'delete_object()',
+            r'\w+\s*\.\s*put_object\s*\(': 'put_object()',
+            r'\w+\s*\.\s*get_object\s*\(': 'get_object()',
+            r'\w+\s*\.\s*batch_write_item\s*\(': 'batch_write_item()',
+            r'\w+\s*\.\s*send_message\s*\(': 'send_message()',
+            r'\w+\s*\.\s*publish\s*\([^)]*TopicArn': 'publish() with TopicArn',
+            r'lambda_handler\s*\(': 'lambda_handler()',
+            r'event\s*\[\s*[\'"]Records[\'"]\s*\]': "event['Records']",
+            r'record_event\s*\[\s*[\'"]s3[\'"]\s*\]': "record_event['s3']",
+            r'\w+\s*\.\s*run_task\s*\(': 'run_task()',
+            r'\w+\s*\.\s*register_task_definition\s*\(': 'register_task_definition()',
+            r'\w+\s*\.\s*start_task\s*\(': 'start_task()',
+            r'\w+\s*\.\s*list_tasks\s*\(': 'list_tasks()',
+            r'\w+\s*\.\s*describe_tasks\s*\(': 'describe_tasks()',
+            r'\w+\s*\.\s*stop_task\s*\(': 'stop_task()',
+            r'\bfargate\b': 'Fargate',
+            r'\bFargate\b': 'Fargate',
+            r'\bFARGATE\b': 'Fargate',
+            r'\becs\s*\.\s*client': 'ECS client',
+            r'\brds\s*\.\s*client': 'RDS client',
+            r'\brds_client\b': 'rds_client',
+            r'\w+\s*\.\s*create_db_instance\s*\(': 'create_db_instance()',
+            r'\w+\s*\.\s*delete_db_instance\s*\(': 'delete_db_instance()',
+            r'\w+\s*\.\s*describe_db_instances\s*\(': 'describe_db_instances()',
+            r'\w+\s*\.\s*modify_db_instance\s*\(': 'modify_db_instance()',
+            r'\bDBInstanceIdentifier\b': 'DBInstanceIdentifier',
+            r'\bDBInstanceClass\b': 'DBInstanceClass',
+            r'\bRDS_ENDPOINT\b': 'RDS_ENDPOINT',
+            r'\bRDS_HOST\b': 'RDS_HOST',
+        }
+        
+        # Return mapped name or simplified regex pattern
+        if regex_pattern in pattern_map:
+            return pattern_map[regex_pattern]
+        
+        # Fallback: extract key part of pattern
+        if match:
+            return str(match)
+        
+        # Last resort: return simplified pattern
+        return regex_pattern.replace(r'\b', '').replace(r'\s*', ' ').replace(r'\w+', 'method').replace('\\', '')[:50]
     
     def _detect_azure_patterns(self, code: str) -> List[str]:
         """Detect Azure patterns in code"""
@@ -236,20 +371,69 @@ class ValidateGCPCodeUseCase:
     def _validate_gcp_apis(self, code: str, language: str) -> bool:
         """Validate that GCP APIs are used correctly"""
         if language == 'python':
-            # Check for GCP imports
+            # Check for GCP imports - be flexible with import styles
             has_gcp_imports = any(pattern in code for pattern in [
                 'from google.cloud', 'import google.cloud',
                 'google.cloud.storage', 'google.cloud.firestore',
-                'google.cloud.pubsub', 'google.cloud.functions'
+                'google.cloud.pubsub', 'google.cloud.functions',
+                'google.cloud.bigtable', 'google.cloud.sql',
+                'google.cloud.compute', 'google.cloud.monitoring',
+                'google.cloud.endpoints', 'google.cloud.apigee',
+                'google.cloud.container', 'google.cloud.run',
+                'google.cloud.run_v2', 'from google.cloud.run_v2',
+                'google.cloud.memorystore', 'google.api_core',
+                'google.auth', 'google.generativeai'
             ])
             
             # Check for proper GCP client initialization
             has_gcp_clients = any(pattern in code for pattern in [
                 'storage.Client()', 'firestore.Client()',
-                'pubsub_v1.PublisherClient()', 'pubsub_v1.SubscriberClient()'
+                'pubsub_v1.PublisherClient()', 'pubsub_v1.SubscriberClient()',
+                'bigtable.Client()', 'sql.Client()',
+                'compute.Client()', 'monitoring.Client()',
+                'container_v1.ClusterManagerClient()',
+                'run_v2.ServicesClient()', 'run_v2.JobsClient()',
+                'run_v2.ExecutionsClient()', 'run_v2.RevisionsClient()',
+                'ServicesClient()', 'JobsClient()',  # Cloud Run clients without full path
+                'run_v2',  # Cloud Run v2 API usage
+                'Client()', '.Client()'  # Generic client pattern
             ])
             
-            return has_gcp_imports or has_gcp_clients
+            # Also check for GCP environment variables
+            has_gcp_env_vars = any(pattern in code for pattern in [
+                'GCP_PROJECT_ID', 'GCP_REGION', 'GCS_BUCKET_NAME',
+                'GCP_CLOUD_FUNCTION_NAME', 'GCP_CLOUD_RUN_SERVICE_NAME',
+                'GCP_CLOUD_RUN_IMAGE', 'GCP_CLOUD_RUN_JOB_NAME',
+                'GCP_FIRESTORE_COLLECTION_NAME', 'GCP_PUBSUB_TOPIC_ID',
+                'GOOGLE_APPLICATION_CREDENTIALS', 'GOOGLE_CLOUD_PROJECT'
+            ])
+            
+            # Check for GCP-specific method calls (even without explicit imports)
+            has_gcp_methods = any(pattern in code.lower() for pattern in [
+                '.bucket(', '.blob(', '.download_as_text', '.upload_from',
+                '.collection(', '.document(', '.download', '.upload',
+                '.publish(', '.subscribe(', 'gs://',
+                # Cloud Run specific patterns
+                '.create_service(', '.get_service(', '.list_services(',
+                '.create_job(', '.run_job(', '.get_job(', '.list_jobs(',
+                'run_v2', 'cloud.run', 'cloud_run',
+                'run_v2.service', 'run_v2.job', 'run_v2.container',
+                'createservicerequest', 'createjobrequest', 'runjobrequest',
+                'executiontemplate', 'revisiontemplate'
+            ])
+            
+            # If code has no cloud operations at all, consider it valid
+            # (simple Python code without cloud services)
+            has_cloud_indicators = any(pattern in code.lower() for pattern in [
+                'client', 'bucket', 'blob', 'storage', 'database', 'queue',
+                'topic', 'function', 'service', 'instance'
+            ])
+            
+            # Return True if:
+            # 1. Has GCP imports/clients/env vars (explicit GCP usage), OR
+            # 2. Has GCP methods (implicit GCP usage), OR
+            # 3. No cloud indicators at all (simple code, not cloud-related)
+            return has_gcp_imports or has_gcp_clients or has_gcp_env_vars or has_gcp_methods or not has_cloud_indicators
         
         return True  # For other languages, assume valid if no errors
     

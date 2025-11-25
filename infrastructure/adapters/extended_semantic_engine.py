@@ -3475,6 +3475,18 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         # Store original code for Gemini validation
         original_code = code
         
+        # Detect if this is a migration script (reads from DynamoDB, writes to Firestore)
+        # Migration scripts typically have: scan(), get_item(), query() AND put_item()/batch_write_item()
+        is_migration_script = (
+            re.search(r'\.(scan|get_item|query)\(', code, re.IGNORECASE) and
+            re.search(r'\.(put_item|batch_write_item)\(', code, re.IGNORECASE)
+        )
+        
+        if is_migration_script:
+            # MIGRATION SCRIPT MODE: Preserve DynamoDB read operations, replace write operations
+            return self._migrate_dynamodb_migration_script(code, original_code)
+        
+        # APPLICATION CODE MODE: Replace all DynamoDB with Firestore
         # CRITICAL FIRST PASS: Catch ALL boto3.client('dynamodb') patterns BEFORE anything else
         code = re.sub(
             r'(\w+)\s*=\s*boto3\.client\s*\(\s*[\'\"]dynamodb[\'\"][^\)]*\)',
@@ -3642,6 +3654,128 @@ class ExtendedPythonTransformer(BaseExtendedTransformer):
         
         # Use Gemini to validate and fix any remaining AWS patterns
         code = self._validate_and_fix_with_gemini(code, original_code)
+        
+        return code
+    
+    def _migrate_dynamodb_migration_script(self, code: str, original_code: str) -> str:
+        """
+        Migrate DynamoDB to Firestore migration script.
+        Preserves DynamoDB read operations (scan, get_item, query) and replaces write operations.
+        """
+        # Ensure boto3 import is present (for reading from DynamoDB)
+        if 'import boto3' not in code:
+            # Add boto3 import at the top if not present
+            code = 'import boto3\n' + code
+        
+        # Ensure Firestore imports are present (for writing to Firestore)
+        if 'from google.cloud import firestore' not in code:
+            if 'import firebase_admin' not in code:
+                # Add Firestore imports
+                code = 'import firebase_admin\nfrom firebase_admin import credentials, firestore\nfrom decimal import Decimal\n' + code
+            elif 'from firebase_admin import' not in code:
+                code = code.replace('import firebase_admin', 'import firebase_admin\nfrom firebase_admin import credentials, firestore\nfrom decimal import Decimal')
+        
+        # Find DynamoDB client/resource variable names (for reading)
+        dynamodb_resource_match = re.search(r'(\w+)\s*=\s*boto3\.resource\([\'\"]dynamodb[\'\"][^\)]*\)', code)
+        dynamodb_client_match = re.search(r'(\w+)\s*=\s*boto3\.client\([\'\"]dynamodb[\'\"][^\)]*\)', code)
+        
+        # Preserve DynamoDB resource/client initialization (for reading)
+        # Don't replace these - they're needed for reading from DynamoDB
+        
+        # Add Firestore client initialization (for writing)
+        # Find where DynamoDB client/resource is initialized and add Firestore client nearby
+        if dynamodb_resource_match or dynamodb_client_match:
+            # Find the initialization line
+            init_pattern = r'(\w+)\s*=\s*boto3\.(resource|client)\([\'\"]dynamodb[\'\"][^\)]*\)'
+            def add_firestore_init(match):
+                dynamodb_var = match.group(1)
+                # Add Firestore initialization after DynamoDB initialization
+                return match.group(0) + f'\n\n# Initialize Firestore for writing\nif not firebase_admin._apps:\n    cred = credentials.Certificate(GOOGLE_KEY_PATH)\n    firebase_admin.initialize_app(cred)\n\nfirestore_db = firestore.Client()'
+            code = re.sub(init_pattern, add_firestore_init, code, count=1)
+        else:
+            # No DynamoDB initialization found, add both
+            code = '# Initialize AWS DynamoDB (for reading)\ndynamodb_resource = boto3.resource(\'dynamodb\', region_name=DYNAMO_REGION)\nsource_table = dynamodb_resource.Table(DYNAMO_TABLE_NAME)\n\n# Initialize Google Firestore (for writing)\nif not firebase_admin._apps:\n    cred = credentials.Certificate(GOOGLE_KEY_PATH)\n    firebase_admin.initialize_app(cred)\n\nfirestore_db = firestore.Client()\n' + code
+        
+        # Replace write operations: put_item() -> Firestore set()
+        # Pattern: table.put_item(Item={...}) -> firestore_db.collection(...).document().set(...)
+        def replace_put_item(match):
+            table_var = match.group(1)
+            item = match.group(2)
+            # Try to extract table name from context or use a variable
+            return f'# Write to Firestore\n    doc_ref = firestore_db.collection(FIRESTORE_COLLECTION).document()\n    doc_ref.set({item})'
+        
+        code = re.sub(
+            r'(\w+)\.put_item\(\s*Item\s*=\s*([^\)]+)\)',
+            replace_put_item,
+            code,
+            flags=re.DOTALL
+        )
+        
+        # Replace batch_write_item() -> Firestore batch operations
+        def replace_batch_write(match):
+            return '''# Convert DynamoDB batch write to Firestore batch
+    batch = firestore_db.batch()
+    collection_ref = firestore_db.collection(FIRESTORE_COLLECTION)
+    for item in items:
+        clean_item = convert_decimal(item)  # Convert Decimal types
+        doc_id = clean_item.get(PRIMARY_KEY_FIELD, None)
+        if doc_id:
+            doc_ref = collection_ref.document(str(doc_id))
+        else:
+            doc_ref = collection_ref.document()
+        batch.set(doc_ref, clean_item)
+    batch.commit()'''
+        
+        code = re.sub(
+            r'(\w+)\.batch_write_item\(\s*RequestItems\s*=\s*\{[^}]+\}\s*\)',
+            replace_batch_write,
+            code,
+            flags=re.DOTALL
+        )
+        
+        # Add helper function for Decimal conversion if not present
+        if 'def convert_decimal' not in code:
+            helper_func = '''def convert_decimal(obj):
+    """
+    Recursively converts Decimal types (from DynamoDB) to standard Python
+    int/float types, as Firestore does not support Decimal natively.
+    """
+    if isinstance(obj, list):
+        return [convert_decimal(i) for i in obj]
+    elif isinstance(obj, dict):
+        return {k: convert_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, Decimal):
+        return int(obj) if obj % 1 == 0 else float(obj)
+    else:
+        return obj
+'''
+            # Insert before the main migration function
+            if 'def migrate' in code:
+                code = code.replace('def migrate', helper_func + '\n\ndef migrate', 1)
+            else:
+                code = helper_func + '\n\n' + code
+        
+        # Keep scan(), get_item(), query() operations as DynamoDB operations
+        # These should remain unchanged - they're reading from DynamoDB
+        
+        # Add configuration constants if not present
+        if 'DYNAMO_TABLE_NAME' not in code:
+            config = '''# --- CONFIGURATION ---
+DYNAMO_TABLE_NAME = 'SourceDynamoTable'
+DYNAMO_REGION = 'us-east-1'
+FIRESTORE_COLLECTION = 'DestinationCollection'
+GOOGLE_KEY_PATH = 'path/to/service-account.json'
+PRIMARY_KEY_FIELD = 'UserId'  # Field in DynamoDB to use as Document ID in Firestore
+
+'''
+            # Insert after imports
+            import_end = max(code.rfind('import '), code.rfind('from '))
+            if import_end != -1:
+                next_line = code.find('\n', import_end)
+                if next_line != -1:
+                    code = code[:next_line+1] + config + code[next_line+1:]
+            else:
+                code = config + code
         
         return code
     

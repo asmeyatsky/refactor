@@ -556,28 +556,26 @@ const App = () => {
                           </Typography>
                         </Box>
                         
-                        {/* Validation Progress */}
-                        {progress.validation.progress > 0 && (
-                          <Box>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                              <Typography variant="body2" color="text.secondary">
-                                Validation Agent
-                              </Typography>
-                              <Typography variant="body2" color="text.secondary">
-                                {Math.round(progress.validation.progress)}%
-                              </Typography>
-                            </Box>
-                            <LinearProgress 
-                              variant="determinate" 
-                              value={progress.validation.progress} 
-                              sx={{ height: 8, borderRadius: 4 }}
-                              color="secondary"
-                            />
-                            <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                              {progress.validation.message}
+                        {/* Validation Progress - Always show */}
+                        <Box sx={{ mt: 3 }}>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+                            <Typography variant="body2" color="text.secondary">
+                              Validation Agent
+                            </Typography>
+                            <Typography variant="body2" color="text.secondary">
+                              {Math.round(progress.validation.progress)}%
                             </Typography>
                           </Box>
-                        )}
+                          <LinearProgress 
+                            variant="determinate" 
+                            value={progress.validation.progress} 
+                            sx={{ height: 8, borderRadius: 4 }}
+                            color="secondary"
+                          />
+                          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
+                            {progress.validation.message}
+                          </Typography>
+                        </Box>
                       </Paper>
                     </Box>
                   )}

@@ -3,8 +3,10 @@ FastAPI server for the Cloud Refactor Agent
 Provides API endpoints for the frontend application
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from uuid import uuid4
@@ -33,15 +35,38 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# Add authentication middleware if enabled
+REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "false").lower() == "true"
+if REQUIRE_AUTH:
+    from infrastructure.adapters.auth_middleware import create_auth_middleware
+    auth_middleware = create_auth_middleware()
+    
+    @app.middleware("http")
+    async def authentication_middleware_handler(request: Request, call_next):
+        """Authentication middleware handler"""
+        # Allow health checks and static files without auth
+        if request.url.path.startswith("/api/health") or request.url.path.startswith("/static"):
+            return await call_next(request)
+        
+        # Validate authentication
+        # When Cloud Run IAM is enabled, Cloud Run handles authentication at platform level
+        # so requests reaching here are already authenticated
+        try:
+            user_info = await auth_middleware(request)
+            # If authentication fails, auth_middleware will raise HTTPException
+            # If it returns None or user_info, proceed
+        except Exception as e:
+            # If auth middleware raises an exception, let it propagate (it's an HTTPException)
+            raise
+        
+        response = await call_next(request)
+        return response
+
 # Add CORS middleware to allow frontend requests
+allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:3001",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:3001",
-    ],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,9 +92,10 @@ class MigrateResponse(BaseModel):
     created_at: datetime
 
 
-@app.get("/")
-def read_root():
-    return {"message": "Cloud Refactor Agent API", "status": "running"}
+# Root route removed - frontend will be served instead
+# @app.get("/")
+# def read_root():
+#     return {"message": "Cloud Refactor Agent API", "status": "running"}
 
 
 @app.get("/api/services")
@@ -232,13 +258,17 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         # Update status to in progress
         migration_jobs[migration_id]["status"] = "in_progress"
         
-        # Update progress
+        # Update progress with artificial injection for smooth updates
+        import time
+        
         def update_refactoring_progress(message: str, progress: float):
             if migration_id in job_progress:
                 job_progress[migration_id]["refactoring"] = {
                     "progress": progress,
                     "message": message
                 }
+                # Small delay to ensure frontend can pick up the update
+                time.sleep(0.1)
         
         def update_validation_progress(message: str, progress: float):
             if migration_id in job_progress:
@@ -246,8 +276,28 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
                     "progress": progress,
                     "message": message
                 }
+                # Small delay to ensure frontend can pick up the update
+                time.sleep(0.1)
         
-        update_refactoring_progress("Starting refactoring...", 5.0)
+        def smooth_progress_update(start_progress: float, end_progress: float, 
+                                   message_template: str, steps: int = 5, 
+                                   is_refactoring: bool = True):
+            """Artificially inject smooth progress updates"""
+            for i in range(steps + 1):
+                progress = start_progress + (end_progress - start_progress) * (i / steps)
+                # Use message template as-is (don't format if no placeholders)
+                try:
+                    message = message_template.format(progress=int(progress))
+                except (KeyError, ValueError):
+                    message = message_template
+                if is_refactoring:
+                    update_refactoring_progress(message, progress)
+                else:
+                    update_validation_progress(message, progress)
+                time.sleep(0.15)  # Small delay between steps
+        
+        # Start with smooth progress injection
+        smooth_progress_update(0.0, 5.0, "Initializing refactoring...", steps=3, is_refactoring=True)
         
         # Map language string to enum
         language_map = {
@@ -258,6 +308,8 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         
         if not language:
             raise ValueError(f"Unsupported language: {request.language}")
+        
+        smooth_progress_update(5.0, 10.0, "Setting up workspace...", steps=3, is_refactoring=True)
         
         # Create temporary directory structure
         temp_dir = Path(temp_file_path).parent
@@ -272,17 +324,203 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         target_file = codebase_path / f"code.{file_ext}"
         shutil.copy2(temp_file_path, target_file)
         
-        # Create orchestrator and execute migration
-        update_refactoring_progress("Creating migration orchestrator...", 10.0)
+        smooth_progress_update(10.0, 15.0, "Creating migration orchestrator...", steps=3, is_refactoring=True)
         orchestrator = create_multi_service_migration_system()
         
-        update_refactoring_progress(f"Refactoring {len(request.services)} service(s)...", 20.0)
-        result = orchestrator.execute_migration(
-            str(codebase_path),
-            language,
-            services_to_migrate=request.services
+        smooth_progress_update(15.0, 20.0, "Initializing codebase...", steps=3, is_refactoring=True)
+        
+        # Manually execute migration steps with progress tracking
+        from application.use_cases import InitializeCodebaseUseCase
+        from infrastructure.repositories import CodebaseRepositoryAdapter
+        from infrastructure.adapters import CodeAnalyzerAdapter
+        
+        init_use_case = InitializeCodebaseUseCase(
+            codebase_repo=CodebaseRepositoryAdapter(),
+            code_analyzer=CodeAnalyzerAdapter()
         )
-        update_refactoring_progress("Refactoring complete", 90.0)
+        codebase = init_use_case.execute(str(codebase_path), language)
+        
+        smooth_progress_update(20.0, 30.0, "Analyzing code and creating migration plan...", steps=5, is_refactoring=True)
+        plan = orchestrator.planner_agent.create_migration_plan(codebase.id, request.services)
+        
+        smooth_progress_update(30.0, 35.0, f"Preparing to refactor {len(request.services)} service(s)...", steps=3, is_refactoring=True)
+        refactoring_engine = orchestrator._create_refactoring_engine(request.services)
+        
+        # Get tasks for progress calculation
+        total_tasks = len(plan.get_pending_tasks())
+        if total_tasks == 0:
+            total_tasks = len(request.services) if request.services else 1
+        
+        # Execute refactoring with progress updates
+        update_refactoring_progress("Starting refactoring tasks...", 35.0)
+        
+        # Import the use case to execute manually with progress
+        from application.use_cases import ExecuteMultiServiceRefactoringPlanUseCase
+        execute_use_case = refactoring_engine.execute_multi_service_plan_use_case
+        
+        # Get plan and codebase
+        plan_obj = execute_use_case.plan_repo.load(plan.id)
+        codebase_obj = execute_use_case.codebase_repo.load(plan.codebase_id)
+        
+        errors = []
+        warnings = []
+        transformed_files = 0
+        service_results = {}
+        all_variable_mappings = {}
+        
+        # Group tasks by file
+        tasks_by_file = {}
+        for task in plan_obj.get_pending_tasks():
+            file_path = str(task.file_path)
+            if file_path not in tasks_by_file:
+                tasks_by_file[file_path] = []
+            tasks_by_file[file_path].append(task)
+        
+        total_files = len(tasks_by_file)
+        
+        # Process files with progress updates
+        for file_idx, (file_path, file_tasks) in enumerate(tasks_by_file.items()):
+            # Progress: 35% to 80% for file processing
+            file_start_progress = 35.0 + (file_idx / max(total_files, 1)) * 45.0
+            file_end_progress = 35.0 + ((file_idx + 1) / max(total_files, 1)) * 45.0
+            file_end_progress = min(file_end_progress, 80.0)
+            
+            # Smooth progress for file start
+            smooth_progress_update(
+                file_start_progress, 
+                file_start_progress + 2.0,
+                f"Processing file {file_idx + 1}/{total_files}...",
+                steps=2,
+                is_refactoring=True
+            )
+            
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_content = f.read()
+            except Exception as e:
+                errors.append(f"Failed to read file {file_path}: {str(e)}")
+                continue
+            
+            transformed_content = file_content
+            total_tasks_in_file = len(file_tasks)
+            
+            # Process tasks in file
+            for task_idx, task in enumerate(file_tasks):
+                # Progress within file: distribute remaining 45% across tasks
+                task_range = file_end_progress - file_start_progress - 2.0
+                task_start = file_start_progress + 2.0 + (task_idx / max(total_tasks_in_file, 1)) * task_range
+                task_end = file_start_progress + 2.0 + ((task_idx + 1) / max(total_tasks_in_file, 1)) * task_range
+                task_end = min(task_end, 80.0)
+                
+                # Smooth progress for task
+                smooth_progress_update(
+                    task_start,
+                    task_end,
+                    f"Refactoring task {task_idx + 1}/{total_tasks_in_file} ({task.operation})...",
+                    steps=3,
+                    is_refactoring=True
+                )
+                
+                try:
+                    plan_obj = execute_use_case.plan_repo.load(plan.id)
+                    plan_obj = plan_obj.mark_task_in_progress(task.id)
+                    execute_use_case.plan_repo.save(plan_obj)
+                    
+                    service_type = execute_use_case._get_service_type_from_operation(task.operation)
+                    
+                    if task.operation != "no_op":
+                        transformed_content, variable_mapping = execute_use_case._execute_service_refactoring(
+                            codebase_obj, task, service_type, transformed_content
+                        )
+                        
+                        if variable_mapping and isinstance(variable_mapping, dict):
+                            all_variable_mappings.update(variable_mapping)
+                        
+                        if service_type not in service_results:
+                            service_results[service_type] = {'success': 0, 'failed': 0}
+                        service_results[service_type]['success'] += 1
+                    
+                    plan_obj = execute_use_case.plan_repo.load(plan.id)
+                    plan_obj = plan_obj.mark_task_completed(task.id)
+                    execute_use_case.plan_repo.save(plan_obj)
+                    
+                except Exception as e:
+                    plan_obj = execute_use_case.plan_repo.load(plan.id)
+                    plan_obj = plan_obj.mark_task_failed(task.id, str(e))
+                    execute_use_case.plan_repo.save(plan_obj)
+                    errors.append(f"Task {task.id} failed: {str(e)}")
+                    
+                    service_type = execute_use_case._get_service_type_from_operation(task.operation)
+                    if service_type:
+                        if service_type not in service_results:
+                            service_results[service_type] = {'success': 0, 'failed': 0}
+                        service_results[service_type]['failed'] += 1
+            
+            # Write transformed file
+            try:
+                execute_use_case.file_repo.write_file(file_path, transformed_content)
+                transformed_files += 1
+            except Exception as e:
+                errors.append(f"Failed to write file {file_path}: {str(e)}")
+        
+        smooth_progress_update(80.0, 85.0, "Finalizing refactoring...", steps=3, is_refactoring=True)
+        
+        # Run tests
+        test_results = execute_use_case.test_runner.run_tests(codebase_obj)
+        test_success = test_results.get("success", False)
+        
+        if not test_success:
+            errors.append("Tests failed after refactoring")
+        
+        from domain.value_objects import RefactoringResult
+        execution_result = RefactoringResult(
+            success=len(errors) == 0 and test_success,
+            message=f"Refactoring completed with {transformed_files} files transformed",
+            transformed_files=transformed_files,
+            errors=errors,
+            warnings=warnings,
+            service_results=service_results,
+            variable_mapping=all_variable_mappings
+        )
+        
+        smooth_progress_update(85.0, 90.0, "Verifying refactoring results...", steps=3, is_refactoring=True)
+        verification_result = orchestrator.verification_agent.verify_refactoring_result(
+            original_codebase=codebase,
+            refactored_codebase=codebase,
+            plan=plan
+        )
+        
+        smooth_progress_update(90.0, 95.0, "Running security validation...", steps=3, is_refactoring=True)
+        security_valid = orchestrator.security_gate.validate_code_changes(codebase, codebase, plan)
+        
+        # Compile final result
+        migration_type = f"Multi-Service to GCP" if request.services else f"Auto-Detected Services to GCP"
+        result = {
+            "migration_id": f"mig_{codebase.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+            "codebase_id": codebase.id,
+            "plan_id": plan.id,
+            "execution_result": {
+                "success": execution_result.success,
+                "message": execution_result.message,
+                "transformed_files": execution_result.transformed_files,
+                "errors": execution_result.errors,
+                "warnings": execution_result.warnings,
+                "service_results": execution_result.service_results,
+                "variable_mapping": execution_result.variable_mapping
+            },
+            "verification_result": {
+                "success": verification_result.success,
+                "message": verification_result.message,
+                "errors": verification_result.errors,
+                "warnings": verification_result.warnings
+            },
+            "security_validation_passed": security_valid,
+            "migration_type": migration_type,
+            "services_migrated": request.services,
+            "completed_at": datetime.now().isoformat()
+        }
+        
+        update_refactoring_progress("Refactoring complete", 100.0)
         
         # Read the refactored code from the file AFTER transformation completes
         refactored_code = None
@@ -313,16 +551,28 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
             result["refactored_code"] = request.code
         
         # Validate the refactored code
-        update_refactoring_progress("Refactoring complete", 100.0)
-        update_validation_progress("Starting validation...", 0.0)
+        smooth_progress_update(95.0, 100.0, "Refactoring complete", steps=3, is_refactoring=True)
+        
+        # Start validation with smooth progress
+        smooth_progress_update(0.0, 5.0, "Starting validation...", steps=2, is_refactoring=False)
         
         from application.use_cases.validate_gcp_code_use_case import ValidateGCPCodeUseCase
         
         validator = ValidateGCPCodeUseCase()
+        
+        # Wrap validation progress callback to add smooth updates
+        def smooth_validation_progress(msg: str, pct: float):
+            # Add smooth transitions between validation steps
+            current_progress = job_progress.get(migration_id, {}).get("validation", {}).get("progress", 0.0)
+            if abs(pct - current_progress) > 5.0:  # If jump is large, smooth it
+                smooth_progress_update(current_progress, pct, msg, steps=3, is_refactoring=False)
+            else:
+                update_validation_progress(msg, pct)
+        
         validation_result = validator.validate(
             refactored_code,
             language=request.language,
-            progress_callback=lambda msg, pct: update_validation_progress(msg, pct)
+            progress_callback=smooth_validation_progress
         )
         
         # Add validation results to response
@@ -336,7 +586,7 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
             "gcp_api_correct": validation_result.gcp_api_correct
         }
         
-        update_validation_progress("Validation complete", 100.0)
+        smooth_progress_update(95.0, 100.0, "Validation complete", steps=3, is_refactoring=False)
         
         # Extract variable mapping from result if available
         variable_mapping = {}
@@ -662,7 +912,7 @@ def execute_repository_migration(migration_id: str, repository_id: str, request:
                         "azure_patterns_found": validation_result.azure_patterns_found
                     }
         
-        update_validation_progress("Validation complete", 100.0)
+        smooth_progress_update(95.0, 100.0, "Validation complete", steps=3, is_refactoring=False)
         update_refactoring_progress("Refactoring complete", 100.0)
         
         # Create PR if requested
@@ -802,6 +1052,33 @@ def health_check():
     return {"status": "healthy", "timestamp": datetime.now()}
 
 
+# Serve static frontend files (for Cloud Run deployment)
+# This must be added AFTER all API routes
+frontend_build_path = Path(__file__).parent / "frontend" / "build"
+if frontend_build_path.exists():
+    # Mount static files
+    app.mount("/static", StaticFiles(directory=str(frontend_build_path / "static")), name="static")
+    
+    # Serve index.html for all non-API routes (must be last route)
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str, request: Request):
+        """Serve frontend React app"""
+        # Don't serve API routes
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Don't serve static files (already handled by mount)
+        if full_path.startswith("static/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Serve index.html for all frontend routes
+        index_path = frontend_build_path / "index.html"
+        if index_path.exists():
+            return FileResponse(str(index_path))
+        raise HTTPException(status_code=404, detail="Frontend not found")
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)

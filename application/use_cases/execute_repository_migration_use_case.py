@@ -20,7 +20,10 @@ from infrastructure.adapters.azure_extended_semantic_engine import AzureExtended
 from infrastructure.adapters.azure_extended_semantic_engine import create_azure_extended_semantic_refactoring_engine
 from infrastructure.adapters.dependency_graph_builder import DependencyGraphBuilder
 from infrastructure.adapters.iac_migrator import IACMigrator
-from infrastructure.adapters.test_execution_framework import TestExecutionFramework
+try:
+    from infrastructure.adapters.test_execution_framework import TestExecutionFramework
+except ImportError:
+    TestExecutionFramework = None  # Optional dependency
 from infrastructure.repositories.repository_repository import RepositoryRepositoryAdapter
 
 
@@ -244,14 +247,24 @@ class ExecuteRepositoryMigrationUseCase:
             test_results = None
             if run_tests:
                 try:
-                    test_framework = TestExecutionFramework(repository.local_path)
-                    test_results = test_framework.execute_tests()
+                    if TestExecutionFramework is not None:
+                        test_framework = TestExecutionFramework(repository.local_path)
+                        test_results = test_framework.execute_tests()
+                        
+                        # Store test results in metadata
+                    else:
+                        test_results = {"status": "skipped", "reason": "TestExecutionFramework not available"}
                     
-                    # Store test results in metadata
-                    repository.metadata['test_framework'] = test_results.framework.value
-                    repository.metadata['test_total'] = str(test_results.total_tests)
-                    repository.metadata['test_passed'] = str(test_results.passed)
-                    repository.metadata['test_failed'] = str(test_results.failed)
+                    if isinstance(test_results, dict):
+                        repository.metadata['test_framework'] = test_results.get('framework', 'unknown')
+                        repository.metadata['test_total'] = str(test_results.get('total_tests', 0))
+                        repository.metadata['test_passed'] = str(test_results.get('passed', 0))
+                        repository.metadata['test_failed'] = str(test_results.get('failed', 0))
+                    else:
+                        repository.metadata['test_framework'] = test_results.framework.value
+                        repository.metadata['test_total'] = str(test_results.total_tests)
+                        repository.metadata['test_passed'] = str(test_results.passed)
+                        repository.metadata['test_failed'] = str(test_results.failed)
                 except Exception as e:
                     repository.metadata['test_error'] = str(e)
             

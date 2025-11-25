@@ -1,0 +1,282 @@
+[
+  {
+    "test_name": "aws_s3",
+    "success": true,
+    "migration_id": "mig_f76f92de",
+    "refactored_code": "import os\nfrom google.cloud import storage\n\nstorage_client = storage.Client()\nbucket_name = os.getenv('GCS_BUCKET_NAME', 'my-gcp-bucket')\n\n# Upload file\nbucket = storage_client.bucket(bucket_name)\nblob = bucket.blob('remote_file.txt')\nblob.upload_from_filename('local_file.txt')\n\n# Download file\nbucket = storage_client.bucket(bucket_name)\nblob = bucket.blob('remote_file.txt')\nblob.download_to_filename('local_file.txt')\n\n# List objects\nblobs = storage_client.list_blobs(bucket_name)\nfor blob_item in blobs:\n    print(f\"Key: {blob_item.name}\")",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.storage']"
+    ]
+  },
+  {
+    "test_name": "aws_lambda",
+    "success": true,
+    "migration_id": "mig_ae730de4",
+    "refactored_code": "def process_gcs_file(data, context):\n    \"\"\"\n    Background Cloud Function triggered by a new file in Cloud Storage.\n    The 'data' parameter contains the bucket and file information.\n    The 'context' parameter provides event metadata.\n    \"\"\"\n    # Extract bucket and object name from the data payload\n    bucket = data.get('bucket')\n    key = data.get('name')\n\n    if not bucket or not key:\n        print(\"Missing bucket or object name in event data.\")\n        return # Cloud Functions don't return HTTP responses\n\n    print(f\"Processing {key} from {bucket}\")\n\n    # Further processing logic would go here\n    # For example, downloading the file, processing it, and storing results.\n\n    # Cloud Functions triggered by GCS do not return HTTP responses.\n    # The function simply completes execution.",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "GCP API usage may be incorrect or incomplete"
+      ],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": false
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.functions', 'def main']"
+    ]
+  },
+  {
+    "test_name": "aws_dynamodb",
+    "success": true,
+    "migration_id": "mig_5071b442",
+    "refactored_code": "from google.cloud import firestore\nimport os\n\nfirestore_db = firestore.Client()\ncollection_ref = firestore_db.collection(os.getenv('FIRESTORE_COLLECTION_NAME', 'my-collection'))\n\n# Put item\n# In Firestore, the document ID is often separate from the document fields.\n# If 'id' is meant to be the document ID, it's passed to .document().\n# If it's also a field within the document, it can be included in the dictionary.\n# For direct mapping, we'll use '123' as the document ID.\ncollection_ref.document('123').set(\n    {\n        'name': 'Test Item',\n        'value': 42\n    }\n)\n\n# Get item\ndoc_ref = collection_ref.document('123')\ndoc = doc_ref.get()\n\nitem = None\nif doc.exists:\n    item = doc.to_dict()",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.firestore']"
+    ]
+  },
+  {
+    "test_name": "aws_sqs",
+    "success": true,
+    "migration_id": "mig_cae2848a",
+    "refactored_code": "import os\nimport json\nfrom google.cloud import pubsub_v1\n\n# Initialize Pub/Sub Publisher client\npubsub_publisher = pubsub_v1.PublisherClient()\n\n# Get environment variables for publishing\ngcp_project_id = os.getenv(\"GCP_PROJECT_ID\", \"your-gcp-project-id\")\npubsub_topic_id = os.getenv(\"GCP_PUBSUB_TOPIC_ID\", \"your-pubsub-topic\")\n\n# Construct the topic path for publishing\ntopic_path = pubsub_publisher.topic_path(gcp_project_id, pubsub_topic_id)\n\n# Send message to Pub/Sub topic\nmessage_data = {'key': 'value'} # Example message data\nfuture = pubsub_publisher.publish(topic_path, json.dumps(message_data).encode(\"utf-8\"))\nmessage_id = future.result() # Blocks until the message is published\nprint(f\"Published message with ID: {message_id}\")\n\n# Initialize Pub/Sub Subscriber client for receiving messages\npubsub_subscriber = pubsub_v1.SubscriberClient()\n\n# Get environment variables for subscribing\npubsub_subscription_id = os.getenv(\"GCP_PUBSUB_SUBSCRIPTION_ID\", \"your-pubsub-subscription\")\n\n# Construct the subscription path for receiving\nsubscription_path = pubsub_subscriber.subscription_path(gcp_project_id, pubsub_subscription_id)\n\n# Receive messages from Pub/Sub subscription\n# Using pull method for simplicity, streaming pull is also an option.\nresponse = pubsub_subscriber.pull(request={\"subscription\": subscription_path, \"max_messages\": 10})\n\nack_ids = []\nfor received_message in response.received_messages:\n    print(f\"Received message: {received_message.message.data.decode('utf-8')}\")\n    ack_ids.append(received_message.ack_id)\n\n# Acknowledge received messages to remove them from the subscription\nif ack_ids:\n    pubsub_subscriber.acknowledge(request={\"subscription\": subscription_path, \"ack_ids\": ack_ids})\n    print(f\"Acknowledged {len(ack_ids)} messages.\")\nelse:\n    print(\"No messages received.\")",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.pubsub']"
+    ]
+  },
+  {
+    "test_name": "aws_sns",
+    "success": false,
+    "migration_id": "mig_bef5e5c9",
+    "refactored_code": "import os\nimport json\nfrom google.cloud import pubsub_v1\n\n# Initialize Pub/Sub publisher client\npubsub_publisher = pubsub_v1.PublisherClient()\n\n# Get the Pub/Sub summary topic path from environment variables\n# Default value is a GCP-style topic path\nsummary_topic_path = os.getenv('PUB_SUB_SUMMARY_TOPIC', 'projects/your-gcp-project-id/topics/summary-topic')\n\n# Prepare the message payload\n# The original message was json.dumps({'key': 'value'})\nmessage_payload = json.dumps({'key': 'value'}).encode('utf-8')\n\n# Publish the message to the Pub/Sub topic\n# The 'Subject' parameter from SNS is removed as Pub/Sub does not support it directly\nfuture = pubsub_publisher.publish(summary_topic_path, message_payload)\n\n# Wait for the message to be published and get the message ID\n# The original code had 'response = ...', so we'll assign the result to a variable\npublish_result = future.result()",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.pubsub']"
+    ],
+    "errors": [
+      "Forbidden patterns found: ['sns']"
+    ]
+  },
+  {
+    "test_name": "aws_multi_service",
+    "success": false,
+    "error": "Migration timed out"
+  },
+  {
+    "test_name": "azure_blob_storage",
+    "success": false,
+    "migration_id": "mig_93248c05",
+    "refactored_code": "# ERROR during transformation: too many values to unpack (expected 2)\n# Original code preserved below\nTraceback (most recent call last):\n  File \"/Users/allansmeyatsky/refactor/application/use_cases/__init__.py\", line 448, in _execute_service_refactoring\n    transformed_content, variable_mapping = _transform_code_standalone(\n                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        content=original_content_str,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n        file_path=file_path_str\n        ^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/allansmeyatsky/refactor/application/use_cases/__init__.py\", line 542, in _transform_code_standalone\n    transformed_content, variable_mapping = ast_engine.transform_code(content, language, recipe)\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: too many values to unpack (expected 2)\n\n\n\nfrom azure.storage.blob import BlobServiceClient\nimport os\n\nconnection_string = os.getenv('AZURE_STORAGE_CONNECTION_STRING')\nblob_service_client = BlobServiceClient.from_connection_string(connection_string)\ncontainer_name = os.getenv('AZURE_STORAGE_CONTAINER', 'my-container')\n\n# Upload blob\nblob_client = blob_service_client.get_blob_client(container=container_name, blob='my-blob.txt')\nwith open('local_file.txt', 'rb') as data:\n    blob_client.upload_blob(data)\n\n# Download blob\nwith open('downloaded_file.txt', 'wb') as download_file:\n    download_file.write(blob_client.download_blob().readall())\n",
+    "validation": {
+      "is_valid": false,
+      "errors": [
+        "Code contains syntax errors",
+        "Found 3 Azure patterns in code"
+      ],
+      "warnings": [
+        "Code may not be fully migrated to GCP",
+        "GCP API usage may be incorrect or incomplete"
+      ],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [
+        "AZURE_STORAGE_CONTAINER",
+        "azure.storage",
+        "BlobServiceClient"
+      ],
+      "syntax_valid": false,
+      "gcp_api_correct": false
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.storage', 'storage.Client']",
+      "Code contains syntax errors",
+      "Found 3 Azure patterns in code"
+    ],
+    "errors": [
+      "Forbidden patterns found: ['azure.storage', 'BlobServiceClient', 'AZURE_STORAGE']"
+    ]
+  },
+  {
+    "test_name": "azure_functions",
+    "success": true,
+    "migration_id": "mig_c3e4657b",
+    "refactored_code": "import logging\n\ndef hello_http(request):\n    logging.info('Python HTTP trigger function processed a request.')\n    name = request.args.get('name')\n    \n    if name:\n        return f\"Hello {name}!\"\n    else:\n        return \"Hello, World!\"",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [
+        "GCP API usage may be incorrect or incomplete"
+      ],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": false
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.functions', 'def main']"
+    ]
+  },
+  {
+    "test_name": "azure_cosmos_db",
+    "success": false,
+    "migration_id": "mig_cbab6bb8",
+    "refactored_code": "# ERROR during transformation: too many values to unpack (expected 2)\n# Original code preserved below\nTraceback (most recent call last):\n  File \"/Users/allansmeyatsky/refactor/application/use_cases/__init__.py\", line 448, in _execute_service_refactoring\n    transformed_content, variable_mapping = _transform_code_standalone(\n                                            ~~~~~~~~~~~~~~~~~~~~~~~~~~^\n        content=original_content_str,\n        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n    ...<4 lines>...\n        file_path=file_path_str\n        ^^^^^^^^^^^^^^^^^^^^^^^\n    )\n    ^\n  File \"/Users/allansmeyatsky/refactor/application/use_cases/__init__.py\", line 542, in _transform_code_standalone\n    transformed_content, variable_mapping = ast_engine.transform_code(content, language, recipe)\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nValueError: too many values to unpack (expected 2)\n\n\n\nfrom azure.cosmos import CosmosClient, PartitionKey\nimport os\n\nendpoint = os.getenv('AZURE_COSMOS_ENDPOINT')\nkey = os.getenv('AZURE_COSMOS_KEY')\nclient = CosmosClient(endpoint, key)\n\ndatabase = client.create_database_if_not_exists(id='my-database')\ncontainer = database.create_container_if_not_exists(\n    id='my-container',\n    partition_key=PartitionKey(path='/id')\n)\n\n# Create item\ncontainer.create_item({'id': '1', 'name': 'test'})\n",
+    "validation": {
+      "is_valid": false,
+      "errors": [
+        "Code contains syntax errors",
+        "Found 1 AWS patterns in code",
+        "Found 2 Azure patterns in code"
+      ],
+      "warnings": [
+        "Code may not be fully migrated to GCP",
+        "Code may not be fully migrated to GCP",
+        "GCP API usage may be incorrect or incomplete"
+      ],
+      "aws_patterns_found": [
+        "Key="
+      ],
+      "azure_patterns_found": [
+        "CosmosClient",
+        "azure.cosmos"
+      ],
+      "syntax_valid": false,
+      "gcp_api_correct": false
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.firestore']",
+      "Code contains syntax errors",
+      "Found 1 AWS patterns in code",
+      "Found 2 Azure patterns in code"
+    ],
+    "errors": [
+      "Forbidden patterns found: ['azure.cosmos', 'CosmosClient', 'AZURE_COSMOS']"
+    ]
+  },
+  {
+    "test_name": "azure_service_bus",
+    "success": true,
+    "migration_id": "mig_dfb020ef",
+    "refactored_code": "import os\nimport json\nfrom google.cloud import pubsub_v1\n\nproject_id = os.getenv('GCP_PROJECT_ID')\ntopic_id = os.getenv('GCP_PUBSUB_TOPIC_ID', 'my-pubsub-topic')\n\nif not project_id:\n    raise ValueError(\"GCP_PROJECT_ID environment variable not set.\")\n\npubsub_publisher = pubsub_v1.PublisherClient()\n\ntopic_path = pubsub_publisher.topic_path(project_id, topic_id)\n\nmessage_body = 'Hello World'\nencoded_message = json.dumps(message_body).encode('utf-8')\n\ntry:\n    future = pubsub_publisher.publish(topic_path, data=encoded_message)\n    message_id = future.result()\nexcept Exception as e:\n    raise\nfinally:\n    pubsub_publisher.api.transport.close()",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Missing patterns: ['google.cloud.pubsub']"
+    ]
+  },
+  {
+    "test_name": "edge_empty_code",
+    "success": true,
+    "migration_id": "mig_fb3378e9",
+    "refactored_code": "import os\nimport json\nimport csv\nfrom google.cloud import storage\nfrom google.cloud import firestore\nfrom google.cloud import pubsub_v1\nfrom google.cloud.exceptions import NotFound\n\n# Environment variables for Cloud Function configuration\nFIRESTORE_COLLECTION_NAME = os.getenv('FIRESTORE_COLLECTION_NAME', 'my-firestore-collection')\nPUB_SUB_ERROR_TOPIC = os.getenv('PUB_SUB_ERROR_TOPIC', 'projects/my-gcp-project/topics/my-error-topic')\nPUB_SUB_SUMMARY_TOPIC = os.getenv('PUB_SUB_SUMMARY_TOPIC', 'projects/my-gcp-project/topics/my-summary-topic')\n\n# Initialize GCP clients globally to reuse across invocations\nstorage_client = storage.Client()\nfirestore_db = firestore.Client()\npubsub_publisher = pubsub_v1.PublisherClient()\n\ndef batch_write_to_firestore(items, collection_name):\n    \"\"\"\n    Writes a list of items to a Firestore collection in batches.\n    \"\"\"\n    batch_size = 500 # Firestore batch write limit\n    for i in range(0, len(items), batch_size):\n        batch_items = items[i:i + batch_size]\n        batch = firestore_db.batch()\n        collection_ref = firestore_db.collection(collection_name)\n\n        for item in batch_items:\n            # Firestore documents are native Python dicts\n            doc_ref = collection_ref.document() # Auto-generate document ID\n            batch.set(doc_ref, item)\n        \n        batch.commit()\n        print(f\"Committed a batch of {len(batch_items)} items to Firestore collection '{collection_name}'.\")\n\ndef publish_error_message(message_body, topic_path):\n    \"\"\"\n    Publishes an error message to a Pub/Sub error topic.\n    \"\"\"\n    try:\n        # Pub/Sub messages must be bytes\n        future = pubsub_publisher.publish(topic_path, json.dumps(message_body).encode('utf-8'))\n        future.result() # Wait for the publish operation to complete\n        print(f\"Published error message to Pub/Sub topic: {topic_path}\")\n    except Exception as e:\n        print(f\"Error publishing error message to Pub/Sub: {e}\")\n\ndef publish_summary_message(message, topic_path):\n    \"\"\"\n    Publishes a summary message to a Pub/Sub summary topic.\n    \"\"\"\n    try:\n        # Pub/Sub messages must be bytes\n        future = pubsub_publisher.publish(topic_path, message.encode('utf-8'))\n        future.result() # Wait for the publish operation to complete\n        print(f\"Published summary message to Pub/Sub topic: {topic_path}\")\n    except Exception as e:\n        print(f\"Error publishing summary message to Pub/Sub: {e}\")\n\ndef process_gcs_file(data, context):\n    \"\"\"\n    Cloud Function triggered by a new file in a Cloud Storage bucket.\n    Processes the CSV file, stores data in Firestore, and publishes summary/error messages.\n\n    Args:\n        data (dict): The Cloud Storage event payload.\n        context (google.cloud.functions.Context): Metadata for the event.\n    \"\"\"\n    print(f\"Received GCS event: {json.dumps(data)}\")\n\n    bucket_name = data.get('bucket')\n    object_key = data.get('name')\n\n    if not bucket_name or not object_key:\n        print(\"Invalid GCS event: Missing bucket or object name.\")\n        return\n\n    print(f\"Processing gs://{bucket_name}/{object_key}\")\n\n    try:\n        bucket = storage_client.bucket(bucket_name)\n        blob = bucket.blob(object_key)\n        \n        # Download the file content as a string\n        csv_content = blob.download_as_text()\n\n        reader = csv.DictReader(csv_content.splitlines())\n        data_to_store = []\n        for row in reader:\n            data_to_store.append(row) # Assuming simple dicts for Firestore\n\n        if data_to_store:\n            batch_write_to_firestore(data_to_store, FIRESTORE_COLLECTION_NAME)\n            print(f\"Successfully wrote {len(data_to_store)} items to Firestore.\")\n            publish_summary_message(\n                f\"Processed {len(data_to_store)} records from {object_key}\",\n                PUB_SUB_SUMMARY_TOPIC\n            )\n        else:\n            print(\"No data to store from the CSV file.\")\n\n    except NotFound:\n        print(f\"Object gs://{bucket_name}/{object_key} not found.\")\n        publish_error_message(\n            {'error': 'NotFound', 'bucket': bucket_name, 'key': object_key},\n            PUB_SUB_ERROR_TOPIC\n        )\n    except Exception as e:\n        print(f\"Error processing gs://{bucket_name}/{object_key}: {e}\")\n        publish_error_message(\n            {'error': str(e), 'bucket': bucket_name, 'key': object_key},\n            PUB_SUB_ERROR_TOPIC\n        )\n\n    # Cloud Functions do not return HTTP responses for GCS triggers.\n    # The function implicitly returns None if no exception is raised.",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {}
+  },
+  {
+    "test_name": "edge_invalid_syntax",
+    "success": false,
+    "migration_id": "mig_62740cd3",
+    "refactored_code": "import os\nimport json\nimport csv\nfrom io import StringIO\n\nfrom google.cloud import storage\nfrom google.cloud import firestore\nfrom google.cloud import pubsub_v1\nfrom google.cloud.exceptions import NotFound\n\n# --- Global Clients (initialized once per Cloud Function instance) ---\nstorage_client = storage.Client()\nfirestore_db = firestore.Client()\npubsub_publisher = pubsub_v1.PublisherClient()\n\n# --- Environment Variables for Cloud Function configuration ---\nFIRESTORE_COLLECTION_NAME = os.getenv('FIRESTORE_COLLECTION_NAME', 'default-gcp-collection')\n# For Pub/Sub topics, we expect just the topic name, and will construct the full path with project ID\nPUB_SUB_ERROR_TOPIC_NAME = os.getenv('PUB_SUB_ERROR_TOPIC_NAME', 'default-error-topic')\nPUB_SUB_SUMMARY_TOPIC_NAME = os.getenv('PUB_SUB_SUMMARY_TOPIC_NAME', 'default-summary-topic')\nGCP_PROJECT_ID = os.getenv('GCP_PROJECT_ID') # This environment variable must be set for Pub/Sub topic paths\n\n# --- Helper Functions ---\n\ndef batch_write_to_firestore(collection_name, items):\n    \"\"\"\n    Writes a list of items to a Firestore collection in batches.\n    Firestore batch write limit is 500 operations.\n    \"\"\"\n    if not items:\n        return\n\n    collection_ref = firestore_db.collection(collection_name)\n    batch_size = 500\n    for i in range(0, len(items), batch_size):\n        batch = firestore_db.batch()\n        current_batch_items = items[i:i + batch_size]\n        for item in current_batch_items:\n            # Firestore automatically generates document IDs if not specified\n            doc_ref = collection_ref.document()\n            batch.set(doc_ref, item)\n        batch.commit()\n        print(f\"Committed batch of {len(current_batch_items)} items to Firestore collection '{collection_name}'.\")\n\ndef publish_error_message(error_details):\n    \"\"\"\n    Publishes an error message to the Pub/Sub error topic.\n    \"\"\"\n    if not GCP_PROJECT_ID:\n        print(\"GCP_PROJECT_ID environment variable not set. Cannot publish error message.\")\n        return\n\n    topic_path = pubsub_publisher.topic_path(GCP_PROJECT_ID, PUB_SUB_ERROR_TOPIC_NAME)\n    try:\n        # Pub/Sub messages must be bytes\n        future = pubsub_publisher.publish(topic_path, json.dumps(error_details).encode('utf-8'))\n        message_id = future.result()\n        print(f\"Published error message to {topic_path}: {message_id}\")\n    except Exception as e:\n        print(f\"Failed to publish error message to Pub/Sub: {e}\")\n\ndef publish_summary_message(summary_message):\n    \"\"\"\n    Publishes a summary message to the Pub/Sub summary topic.\n    \"\"\"\n    if not GCP_PROJECT_ID:\n        print(\"GCP_PROJECT_ID environment variable not set. Cannot publish summary message.\")\n        return\n\n    topic_path = pubsub_publisher.topic_path(GCP_PROJECT_ID, PUB_SUB_SUMMARY_TOPIC_NAME)\n    try:\n        # Pub/Sub messages must be bytes\n        future = pubsub_publisher.publish(topic_path, summary_message.encode('utf-8'))\n        message_id = future.result()\n        print(f\"Published summary message to {topic_path}: {message_id}\")\n    except Exception as e:\n        print(f\"Failed to publish summary message to Pub/Sub: {e}\")\n\n# --- Main Cloud Function Handler ---\n\ndef process_gcs_file(data, context):\n    \"\"\"\n    Cloud Function triggered by a new file in a GCS bucket.\n    Processes the CSV file, stores data in Firestore, and publishes summary/error messages.\n\n    Args:\n        data (dict): The Cloud Storage event payload.\n                     Example: {'bucket': 'my-bucket', 'name': 'path/to/file.csv', ...}\n        context (google.cloud.functions.Context): Metadata for the event.\n    \"\"\"\n    bucket_name = data.get('bucket')\n    object_key = data.get('name')\n    file_generation = data.get('generation') # GCS object generation number\n\n    if not bucket_name or not object_key:\n        print(\"Missing bucket name or object key in event data. Skipping processing.\")\n        return\n\n    print(f\"Processing GCS file: gs://{bucket_name}/{object_key} (Generation: {file_generation})\")\n\n    try:\n        bucket = storage_client.bucket(bucket_name)\n        blob = bucket.blob(object_key)\n\n        # Download the file content as text\n        csv_content = blob.download_as_text()\n\n        # Process CSV content\n        processed_items = []\n        csv_file = StringIO(csv_content)\n        reader = csv.DictReader(csv_file)\n        for row in reader:\n            # Each row is a dictionary. Firestore can store native Python types.\n            processed_items.append(row)\n\n        if processed_items:\n            # Write processed items to Firestore\n            batch_write_to_firestore(FIRESTORE_COLLECTION_NAME, processed_items)\n            summary_message = (\n                f\"Successfully processed {len(processed_items)} records from \"\n                f\"gs://{bucket_name}/{object_key} and stored in Firestore collection \"\n                f\"'{FIRESTORE_COLLECTION_NAME}'.\"\n            )\n            publish_summary_message(summary_message)\n        else:\n            print(f\"No records found in gs://{bucket_name}/{object_key} or file was empty after processing.\")\n            summary_message = (\n                f\"No records processed from gs://{bucket_name}/{object_key}. \"\n                f\"File might be empty or malformed.\"\n            )\n            publish_summary_message(summary_message)\n\n    except NotFound:\n        error_msg = f\"File gs://{bucket_name}/{object_key} not found. It might have been deleted or moved.\"\n        print(error_msg)\n        publish_error_message({\n            \"error\": error_msg,\n            \"bucket\": bucket_name,\n            \"object\": object_key,\n            \"function_name\": context.function_name,\n            \"event_id\": context.event_id,\n            \"resource\": context.resource\n        })\n        raise # Re-raise to indicate failure to Cloud Functions\n\n    except Exception as e:\n        error_msg = f\"An unexpected error occurred while processing gs://{bucket_name}/{object_key}: {e}\"\n        print(error_msg)\n        publish_error_message({\n            \"error\": str(e),\n            \"message\": error_msg,\n            \"bucket\": bucket_name,\n            \"object\": object_key,\n            \"function_name\": context.function_name,\n            \"event_id\": context.event_id,\n            \"resource\": context.resource\n        })\n        raise # Re-raise to indicate failure to Cloud Functions",
+    "validation": {
+      "is_valid": true,
+      "errors": [],
+      "warnings": [],
+      "aws_patterns_found": [],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {},
+    "validation_passed": false
+  },
+  {
+    "test_name": "edge_no_cloud_code",
+    "success": false,
+    "error": "Migration timed out"
+  },
+  {
+    "test_name": "edge_java_code",
+    "success": true,
+    "migration_id": "mig_1a924cc5",
+    "refactored_code": "\nimport com.google.cloud.storage.*;\nimport com.google.cloud.storage.*;\n\npublic class S3Example {\n    public void uploadFile() {\n        AmazonS3 s3Client = AmazonS3ClientBuilder.standard().build();\n        s3Client.putObject(\"my-bucket\", \"key\", new File(\"file.txt\"));\n    }\n}\n",
+    "validation": {
+      "is_valid": false,
+      "errors": [
+        "Found 1 AWS patterns in code"
+      ],
+      "warnings": [
+        "Code may not be fully migrated to GCP"
+      ],
+      "aws_patterns_found": [
+        "S3Client"
+      ],
+      "azure_patterns_found": [],
+      "syntax_valid": true,
+      "gcp_api_correct": true
+    },
+    "variable_mapping": {},
+    "warnings": [
+      "Found 1 AWS patterns in code"
+    ]
+  }
+]
