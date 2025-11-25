@@ -41,7 +41,7 @@ class ExtendedASTTransformationEngine:
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
 
-        # NEW APPROACH: Use Gemini as PRIMARY transformer
+        # NEW APPROACH: Use Gemini as PRIMARY transformer for Python and Java
         if language == 'python':
             transformed_code = self._transform_with_gemini_primary(code, transformation_recipe)
             
@@ -67,8 +67,29 @@ class ExtendedASTTransformationEngine:
             
             # Validate syntax
             transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
+        elif language == 'java':
+            # Use Gemini for Java transformations (same approach as Python)
+            transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, language='java')
+            
+            # Validate output - reject if still has AWS patterns
+            max_retries = 2
+            retry_count = 0
+            while self._has_aws_patterns(transformed_code, language='java') and retry_count < max_retries:
+                retry_count += 1
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Java output still contains AWS patterns, retrying (attempt {retry_count}/{max_retries})")
+                transformed_code = self._transform_with_gemini_primary(code, transformation_recipe, retry=True, language='java')
+            
+            # Fallback to regex transformer if Gemini fails
+            if self._has_aws_patterns(transformed_code, language='java'):
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning("Gemini Java transformation still has AWS patterns, falling back to regex")
+                transformer = self.transformers[language]
+                transformed_code = transformer.transform(code, transformation_recipe)
         else:
-            # Fallback to existing transformer for non-Python
+            # Fallback to existing transformer for other languages
             transformer = self.transformers[language]
             transformed_code = transformer.transform(code, transformation_recipe)
         
@@ -80,7 +101,7 @@ class ExtendedASTTransformationEngine:
         
         return transformed_code, variable_mapping
     
-    def _transform_with_gemini_primary(self, code: str, recipe: Dict[str, Any], retry: bool = False) -> str:
+    def _transform_with_gemini_primary(self, code: str, recipe: Dict[str, Any], retry: bool = False, language: str = 'python') -> str:
         """Use Gemini as the PRIMARY transformation engine - not as cleanup.
         
         This is the correct approach: LLM understands context and semantics,
@@ -116,7 +137,10 @@ class ExtendedASTTransformationEngine:
             target_api = recipe.get('target_api', 'GCP')
             
             # Build comprehensive prompt for direct transformation
-            prompt = self._build_transformation_prompt(code, service_type, target_api, retry)
+            if language == 'java':
+                prompt = self._build_java_transformation_prompt(code, service_type, target_api, retry)
+            else:
+                prompt = self._build_transformation_prompt(code, service_type, target_api, retry)
             
             # Add timeout and generation config to prevent hanging
             import google.generativeai.types as genai_types
@@ -162,7 +186,7 @@ class ExtendedASTTransformationEngine:
             transformed_code = response.text.strip()
             
             # Extract code from markdown
-            transformed_code = self._extract_code_from_response(transformed_code)
+            transformed_code = self._extract_code_from_response(transformed_code, language=language)
             
             logger.info("Gemini primary transformation completed")
             return transformed_code
@@ -299,11 +323,130 @@ class ExtendedASTTransformationEngine:
         
         return prompt
     
-    def _extract_code_from_response(self, response_text: str) -> str:
-        """Extract Python code from Gemini response, handling various formats."""
+    def _build_java_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
+        """Build a comprehensive prompt for Gemini to transform AWS Java code to GCP."""
+        
+        # Detect services from Java code
+        services_detected = []
+        if re.search(r'com\.amazonaws\.services\.s3|AmazonS3|S3Client', code, re.IGNORECASE):
+            services_detected.append('S3')
+        if re.search(r'com\.amazonaws\.services\.dynamodb|AmazonDynamoDB|DynamoDB', code, re.IGNORECASE):
+            services_detected.append('DynamoDB')
+        if re.search(r'com\.amazonaws\.services\.sqs|AmazonSQS|SQS', code, re.IGNORECASE):
+            services_detected.append('SQS')
+        if re.search(r'com\.amazonaws\.services\.sns|AmazonSNS|SNS', code, re.IGNORECASE):
+            services_detected.append('SNS')
+        if re.search(r'RequestHandler|lambda\.runtime|Lambda', code, re.IGNORECASE):
+            services_detected.append('Lambda')
+        
+        services_str = ', '.join(services_detected) if services_detected else 'AWS services'
+        
+        retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
+        
+        prompt = f"""You are an expert Java code refactoring assistant. Transform the following AWS Java code to Google Cloud Platform (GCP) Java code.
+
+**CRITICAL REQUIREMENTS:**
+1. **ZERO AWS CODE** - The output must contain NO AWS patterns, classes, or APIs
+2. **Complete transformation** - Every AWS service call must be replaced with its GCP equivalent
+3. **Correct Java syntax** - Output must be valid, compilable Java code
+4. **Proper imports** - Include all necessary GCP SDK imports
+5. **Preserve class structure** - Maintain class declarations, method signatures, and structure
+6. **Correct API usage** - Use GCP Java APIs correctly, not AWS patterns with GCP imports
+
+**SERVICES DETECTED:** {services_str}
+
+**TRANSFORMATION RULES:**
+
+**Lambda → Cloud Functions:**
+- `implements RequestHandler<Input, Output>` → `implements HttpFunction`
+- `handleRequest(Input input, Context context)` → `@Override public void service(HttpRequest request, HttpResponse response) throws Exception`
+- Remove AWS Lambda Context usage
+- Replace return statements with `response.setStatusCode()` and `response.getWriter().write()`
+- `return Map.of("statusCode", 200, "body", "...")` → `response.setStatusCode(200); response.getWriter().write("...");`
+
+**S3 → Cloud Storage:**
+- `import com.amazonaws.services.s3.*` → `import com.google.cloud.storage.Storage; import com.google.cloud.storage.StorageOptions; import com.google.cloud.storage.BlobId; import com.google.cloud.storage.BlobInfo;`
+- `AmazonS3 s3Client` → `Storage storage`
+- `AmazonS3ClientBuilder.standard().withRegion("...").build()` → `StorageOptions.getDefaultInstance().getService()`
+- `s3Client.putObject(PutObjectRequest)` → `storage.create(BlobInfo.newBuilder(BlobId.of(bucketName, key)).build(), fileContent)`
+- `s3Client.getObject(GetObjectRequest)` → `Blob blob = storage.get(BlobId.of(bucketName, key)); byte[] content = blob.getContent();`
+- `PutObjectRequest` → `BlobInfo.newBuilder(BlobId.of(...)).build()`
+- Remove AWS-specific request/response objects
+
+**DynamoDB → Firestore:**
+- `import com.amazonaws.services.dynamodbv2.*` → `import com.google.cloud.firestore.Firestore; import com.google.cloud.firestore.FirestoreOptions; import com.google.cloud.firestore.DocumentReference; import com.google.cloud.firestore.WriteBatch;`
+- `AmazonDynamoDB dynamoDB` → `Firestore firestore`
+- `AmazonDynamoDBClientBuilder.standard().withRegion("...").build()` → `FirestoreOptions.getDefaultInstance().getService()`
+- `dynamoDB.putItem(PutItemRequest)` → `firestore.collection(collectionName).document(documentId).set(data).get()`
+- `dynamoDB.getItem(GetItemRequest)` → `DocumentSnapshot document = firestore.collection(collectionName).document(documentId).get().get();`
+- `PutItemRequest` → Use Firestore `set()` method directly with Map<String, Object>
+- `GetItemRequest` → Use Firestore `get()` method
+- Remove `AttributeValue` conversions - Firestore uses native Java types (Map, List, String, Number, Boolean)
+- Remove `convertToAttributeValues()` methods - not needed for Firestore
+
+**SQS → Pub/Sub:**
+- `import com.amazonaws.services.sqs.*` → `import com.google.cloud.pubsub.v1.Publisher; import com.google.pubsub.v1.TopicName; import com.google.pubsub.v1.PubsubMessage; import com.google.protobuf.ByteString;`
+- `AmazonSQS sqsClient` → `Publisher publisher`
+- `sqsClient.sendMessage(SendMessageRequest)` → `TopicName topicName = TopicName.of(projectId, topicId); PubsubMessage message = PubsubMessage.newBuilder().setData(ByteString.copyFromUtf8(messageBody)).build(); publisher.publish(topicName, message);`
+
+**SNS → Pub/Sub:**
+- `import com.amazonaws.services.sns.*` → `import com.google.cloud.pubsub.v1.Publisher; import com.google.pubsub.v1.TopicName; import com.google.pubsub.v1.PubsubMessage;`
+- `AmazonSNS snsClient` → `Publisher publisher` (can reuse same publisher)
+- `snsClient.publish(PublishRequest)` → Same as SQS transformation above
+- Remove `Subject` parameter - Pub/Sub doesn't support it
+
+**Environment Variables:**
+- `DYNAMODB_TABLE_NAME` → `FIRESTORE_COLLECTION_NAME`
+- `SQS_QUEUE_URL` → `PUBSUB_TOPIC_NAME` and `GCP_PROJECT_ID`
+- `SNS_TOPIC_ARN` → `PUBSUB_TOPIC_NAME` and `GCP_PROJECT_ID`
+
+**Variable Naming:**
+- `s3Client` → `storage`
+- `dynamoDB` → `firestore`
+- `sqsClient` → `publisher`
+- `snsClient` → `publisher`
+
+**Exception Handling:**
+- `com.amazonaws.*` exceptions → `com.google.api.gax.rpc.*` exceptions
+- `AmazonServiceException` → `ApiException`
+- `AmazonClientException` → `IOException` or appropriate GCP exception
+
+**Code Structure:**
+- Preserve class names, method names (except handler methods)
+- Preserve access modifiers (public, private, protected)
+- Preserve annotations (@Override, etc.)
+- Maintain proper Java formatting and indentation
+- Ensure all imports are correct and necessary
+
+{retry_note}
+
+**INPUT CODE:**
+```java
+{code}
+```
+
+**OUTPUT REQUIREMENTS:**
+- Return ONLY the transformed Java code
+- NO explanations, NO markdown formatting, NO code blocks
+- Just pure, compilable Java code
+- Ensure ALL AWS patterns are removed
+- Ensure ALL GCP APIs are used correctly
+- Preserve the complete class structure
+
+**TRANSFORMED GCP CODE:**"""
+        
+        return prompt
+    
+    def _extract_code_from_response(self, response_text: str, language: str = 'python') -> str:
+        """Extract code from Gemini response, handling various formats."""
         # Remove markdown code blocks
-        if '```python' in response_text:
-            parts = response_text.split('```python')
+        code_block_marker = f'```{language}' if language != 'python' else '```python'
+        if code_block_marker in response_text:
+            parts = response_text.split(code_block_marker)
+            if len(parts) > 1:
+                response_text = parts[1].split('```')[0].strip()
+        elif '```java' in response_text and language == 'java':
+            parts = response_text.split('```java')
             if len(parts) > 1:
                 response_text = parts[1].split('```')[0].strip()
         elif '```' in response_text:
@@ -326,8 +469,13 @@ class ExtendedASTTransformationEngine:
             if not code_started:
                 if stripped.startswith(('Here', 'The', 'This', '**', '##')):
                     continue
-                if stripped.startswith(('import', 'from', 'def', 'class')):
-                    code_started = True
+                # Java code starts with package, import, or class/interface/enum
+                if language == 'java':
+                    if stripped.startswith(('package', 'import', 'public', 'private', 'class', 'interface', 'enum')):
+                        code_started = True
+                else:
+                    if stripped.startswith(('import', 'from', 'def', 'class')):
+                        code_started = True
             
             if code_started or stripped:
                 # Skip markdown headers
@@ -337,17 +485,32 @@ class ExtendedASTTransformationEngine:
         
         return '\n'.join(cleaned_lines).strip()
     
-    def _has_aws_patterns(self, code: str) -> bool:
+    def _has_aws_patterns(self, code: str, language: str = 'python') -> bool:
         """Check if code still contains AWS patterns."""
-        aws_patterns = [
-            r'\bboto3\b',
-            r'\bdynamodb_client\b',
-            r'\bsqs_client\b',
-            r'\bsns_client\b',
-            r'\bs3_client\b',
-            r'\blambda_handler\s*\(',
-            r'event\[[\'"]Records[\'"]\]',
-            r'\.get_object\s*\(',
+        if language == 'java':
+            aws_patterns = [
+                r'com\.amazonaws',
+                r'AmazonS3',
+                r'AmazonDynamoDB',
+                r'AmazonSQS',
+                r'AmazonSNS',
+                r'RequestHandler',
+                r'AWS.*Client',
+                r'S3Client',
+                r'DynamoDBClient',
+                r'SQSClient',
+                r'SNSClient',
+            ]
+        else:
+            aws_patterns = [
+                r'\bboto3\b',
+                r'\bdynamodb_client\b',
+                r'\bsqs_client\b',
+                r'\bsns_client\b',
+                r'\bs3_client\b',
+                r'\blambda_handler\s*\(',
+                r'event\[[\'"]Records[\'"]\]',
+                r'\.get_object\s*\(',
             r'\.batch_write_item\s*\(',
             r'\.send_message\s*\(',
             r'Bucket\s*=',
