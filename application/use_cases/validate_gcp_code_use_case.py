@@ -165,7 +165,7 @@ class ValidateGCPCodeUseCase:
             errors.append("Code contains syntax errors")
         
         # Step 2: Check for AWS patterns (40%)
-        aws_patterns_found = self._detect_aws_patterns(code)
+        aws_patterns_found = self._detect_aws_patterns(code, language)
         if progress_callback:
             progress_callback(f"Found {len(aws_patterns_found)} AWS patterns", 40.0)
         
@@ -281,13 +281,35 @@ class ValidateGCPCodeUseCase:
             logger.error(f"Syntax validation error: {e}")
             return False
     
-    def _detect_aws_patterns(self, code: str) -> List[str]:
+    def _detect_aws_patterns(self, code: str, language: str = 'python') -> List[str]:
         """Detect AWS patterns in code"""
         found_patterns = []
         code_lower = code.lower()
         
+        # Use language-specific patterns if C#
+        patterns_to_check = self.AWS_PATTERNS
+        if language in ['csharp', 'c#']:
+            # Add C#-specific AWS patterns
+            csharp_patterns = [
+                'Amazon.',
+                'AWSSDK.',
+                'AmazonS3',
+                'AmazonDynamoDB',
+                'AmazonSQS',
+                'AmazonSNS',
+                'AmazonLambda',
+                'ILambdaContext',
+                'APIGatewayProxy',
+                'IAmazon',
+                'S3Client',
+                'DynamoDBClient',
+                'SQSClient',
+                'SNSClient',
+            ]
+            patterns_to_check = list(self.AWS_PATTERNS) + csharp_patterns
+        
         # Check literal patterns - be more precise to avoid false positives
-        for pattern in self.AWS_PATTERNS:
+        for pattern in patterns_to_check:
             pattern_lower = pattern.lower()
             if pattern_lower in code_lower:
                 # Skip common false positives that might appear in GCP code
@@ -378,7 +400,34 @@ class ValidateGCPCodeUseCase:
     
     def _validate_gcp_apis(self, code: str, language: str) -> bool:
         """Validate that GCP APIs are used correctly"""
-        if language == 'python':
+        if language in ['csharp', 'c#']:
+            # Check for GCP C# imports
+            has_gcp_imports = any(pattern in code for pattern in [
+                'using Google.Cloud',
+                'Google.Cloud.Storage',
+                'Google.Cloud.Firestore',
+                'Google.Cloud.PubSub',
+                'Google.Cloud.Functions',
+                'Google.Cloud.Bigtable',
+                'Google.Cloud.Sql',
+                'Google.Cloud.Compute',
+                'Google.Cloud.Monitoring',
+                'Google.Cloud.Container',
+                'Google.Cloud.Run',
+                'Google.Api.Gax',
+            ])
+            
+            # Check for proper GCP client initialization
+            has_gcp_clients = any(pattern in code for pattern in [
+                'StorageClient',
+                'FirestoreDb',
+                'PublisherClient',
+                'SubscriberClient',
+                'FunctionsFramework',
+            ])
+            
+            return has_gcp_imports or has_gcp_clients
+        elif language == 'python':
             # Check for GCP imports - be flexible with import styles
             has_gcp_imports = any(pattern in code for pattern in [
                 'from google.cloud', 'import google.cloud',
