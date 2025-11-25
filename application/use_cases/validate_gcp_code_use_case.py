@@ -286,9 +286,25 @@ class ValidateGCPCodeUseCase:
         found_patterns = []
         code_lower = code.lower()
         
-        # Use language-specific patterns if C#
+        # Use language-specific patterns
         patterns_to_check = self.AWS_PATTERNS
-        if language in ['csharp', 'c#']:
+        if language == 'java':
+            # Add Java-specific AWS patterns
+            java_patterns = [
+                'com.amazonaws',
+                'AmazonS3',
+                'AmazonDynamoDB',
+                'AmazonSQS',
+                'AmazonSNS',
+                'S3Client',
+                'DynamoDBClient',
+                'SQSClient',
+                'SNSClient',
+                'AmazonS3ClientBuilder',
+                'S3ClientBuilder',
+            ]
+            patterns_to_check = list(self.AWS_PATTERNS) + java_patterns
+        elif language in ['csharp', 'c#']:
             # Add C#-specific AWS patterns
             csharp_patterns = [
                 'Amazon.',
@@ -322,7 +338,23 @@ class ValidateGCPCodeUseCase:
                 
                 # Only add if not a false positive
                 if pattern_lower not in false_positives:
-                    found_patterns.append(pattern)
+                    # For Java, skip if pattern is in comments
+                    if language == 'java':
+                        # Check if pattern appears only in comments
+                        lines = code.split('\n')
+                        pattern_in_code = False
+                        for line in lines:
+                            stripped = line.strip()
+                            # Skip comment lines
+                            if stripped.startswith('//') or stripped.startswith('*') or '/*' in stripped:
+                                continue
+                            if pattern_lower in line.lower():
+                                pattern_in_code = True
+                                break
+                        if pattern_in_code:
+                            found_patterns.append(pattern)
+                    else:
+                        found_patterns.append(pattern)
         
         # Check regex patterns - these are more precise
         for pattern in self.AWS_METHOD_PATTERNS:
