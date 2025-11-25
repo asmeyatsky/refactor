@@ -118,8 +118,8 @@ async def migrate_code(request: MigrateRequest, background_tasks: BackgroundTask
     migration_id = f"mig_{uuid4().hex[:8]}"
     
     # Validate input
-    if request.language not in ["python", "java"]:
-        raise HTTPException(status_code=400, detail="Unsupported language")
+    if request.language not in ["python", "java", "csharp", "c#"]:
+        raise HTTPException(status_code=400, detail="Unsupported language. Supported: python, java, csharp, c#")
     
     if not request.services:
         raise HTTPException(status_code=400, detail="At least one service must be selected")
@@ -194,7 +194,7 @@ def get_migration_status(migration_id: str):
                         if temp_file_path:
                             temp_dir = Path(temp_file_path).parent
                             codebase_path = temp_dir / "codebase"
-                            lang_ext_map = {'python': 'py', 'java': 'java'}
+                            lang_ext_map = {'python': 'py', 'java': 'java', 'csharp': 'cs', 'c#': 'cs'}
                             file_ext = lang_ext_map.get(job['request'].language, 'py')
                             code_file = codebase_path / f"code.{file_ext}"
                             if code_file.exists():
@@ -302,7 +302,9 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         # Map language string to enum
         language_map = {
             'python': ProgrammingLanguage.PYTHON,
-            'java': ProgrammingLanguage.JAVA
+            'java': ProgrammingLanguage.JAVA,
+            'csharp': ProgrammingLanguage.CSHARP,
+            'c#': ProgrammingLanguage.CSHARP
         }
         language = language_map.get(request.language)
         
@@ -319,7 +321,7 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         # Copy the uploaded file to the codebase directory
         import shutil
         # Map language to file extension
-        lang_ext_map = {'python': 'py', 'java': 'java'}
+        lang_ext_map = {'python': 'py', 'java': 'java', 'csharp': 'cs', 'c#': 'cs'}
         file_ext = lang_ext_map.get(request.language, 'py')
         target_file = codebase_path / f"code.{file_ext}"
         shutil.copy2(temp_file_path, target_file)
@@ -525,7 +527,7 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         # Read the refactored code from the file AFTER transformation completes
         refactored_code = None
         # Map language to file extension
-        lang_ext_map = {'python': 'py', 'java': 'java'}
+        lang_ext_map = {'python': 'py', 'java': 'java', 'csharp': 'cs', 'c#': 'cs'}
         file_ext = lang_ext_map.get(request.language, 'py')
         code_file = codebase_path / f"code.{file_ext}"
         
@@ -898,7 +900,7 @@ def execute_repository_migration(migration_id: str, repository_id: str, request:
                     update_validation_progress(f"Validating {file_path}...", (idx / total_files) * 90.0)
                     validation_result = validator.validate(
                         file_content,
-                        language='python' if file_path.endswith('.py') else 'java',
+                        language='python' if file_path.endswith('.py') else ('java' if file_path.endswith('.java') else ('csharp' if file_path.endswith(('.cs', '.csx')) else 'python')),
                         progress_callback=lambda msg, pct: update_validation_progress(
                             f"{file_path}: {msg}", 
                             ((idx / total_files) * 90.0) + (pct * 0.9 / total_files)

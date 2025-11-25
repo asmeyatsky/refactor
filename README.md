@@ -81,9 +81,53 @@ This repository includes a post-commit hook that automatically pushes changes to
 
 ## Installation
 
+### Prerequisites
+
+- Python 3.7+ (Python 3.9+ recommended)
+- Node.js 14+ (for frontend)
+- Google Cloud SDK (for deployment)
+- Gemini API Key (for LLM-powered transformations)
+
+### Backend Setup
+
 ```bash
-# The system requires Python 3.7+
-pip install astor  # For AST transformations
+# Clone repository
+git clone https://github.com/your-org/refactor.git
+cd refactor
+
+# Create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Set environment variables
+export GEMINI_API_KEY=your_gemini_api_key
+export GCP_PROJECT_ID=your-project-id  # Optional
+export GCP_REGION=us-central1  # Optional
+```
+
+### Frontend Setup
+
+```bash
+cd frontend
+npm install
+```
+
+### Environment Variables
+
+Create a `.env` file in the root directory:
+
+```bash
+# Required
+GEMINI_API_KEY=your_gemini_api_key
+
+# Optional
+GCP_PROJECT_ID=your-project-id
+GCP_REGION=us-central1
+REQUIRE_AUTH=false
+ALLOWED_ORIGINS=http://localhost:3000,http://localhost:3001
 ```
 
 ## Usage
@@ -333,7 +377,7 @@ The system is designed to:
 
 ### In Development 🔄
 - Enhanced IaC migration patterns
-- Additional programming language support (Go, Node.js, C#)
+- Additional programming language support (Go, Node.js)
 - Advanced dependency analysis
 - CI/CD pipeline integration
 
@@ -345,6 +389,75 @@ The system is designed to:
 - Migration rollback capabilities
 
 See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed repository-level migration requirements.
+
+## Language Support Details
+
+### Python ✅
+- **Status**: Production Ready
+- **Features**: AST-powered transformations, comprehensive service coverage
+- **Test Coverage**: 100% of AWS services
+
+### Java ✅
+- **Status**: Production Ready (Gemini API Enhanced)
+- **Features**: Intelligent LLM-powered transformations, preserves class structure
+- **Test Coverage**: 100% of AWS services
+- **See**: [JAVA_MIGRATION_STATUS.md](JAVA_MIGRATION_STATUS.md)
+
+### C# (.NET) ✅
+- **Status**: Production Ready (Gemini API Enhanced)
+- **Features**: Intelligent LLM-powered transformations, preserves C# structure
+- **Test Coverage**: 100% of AWS services
+- **See**: [CSHARP_MIGRATION_STATUS.md](CSHARP_MIGRATION_STATUS.md)
+
+## Advanced Features
+
+### Smart Migration Detection
+- **DynamoDB Migration Scripts**: Automatically detects and preserves boto3 for reading operations
+- **Application Code**: Fully converts to GCP equivalents
+- See [MIGRATION_GUIDE.md](MIGRATION_GUIDE.md) for details
+
+### Repository-Level Migration
+- Full Git repository analysis
+- Cross-file dependency tracking
+- Atomic PR generation
+- Migration Assessment Reports (MAR)
+- See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md)
+
+### Infrastructure as Code
+- Terraform migration
+- CloudFormation migration
+- Pulumi migration
+- Automatic resource mapping
+
+### Test Execution Framework
+- Automatic test detection
+- Multi-framework support (pytest, unittest, JUnit, xUnit, etc.)
+- Pre/post migration test execution
+- Test results in MAR
+
+## Performance
+
+- **Analysis Speed**: ~10 seconds per 100,000 lines of code
+- **Transformation Speed**: ~5-10 seconds per file
+- **Repository Migration**: ~60 minutes for average microservice (<5,000 LoC)
+- **Cost Reduction**: 70-75% reduction in Gemini API costs via TOON format
+
+## Security
+
+- Input validation and sanitization
+- Optional authentication middleware
+- No data retention (temporary files only)
+- Secure API key management
+- No training data usage (Gemini API configured)
+
+## Documentation
+
+- **[accelerator_detail.md](accelerator_detail.md)**: Comprehensive accelerator documentation
+- **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)**: Detailed migration guide with examples
+- **[DEPLOYMENT.md](DEPLOYMENT.md)**: Deployment instructions
+- **[QUICKSTART.md](QUICKSTART.md)**: Quick start guide
+- **[CSHARP_MIGRATION_STATUS.md](CSHARP_MIGRATION_STATUS.md)**: C# migration details
+- **[JAVA_MIGRATION_STATUS.md](JAVA_MIGRATION_STATUS.md)**: Java migration details
 
 ## Contributing
 

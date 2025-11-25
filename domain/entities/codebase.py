@@ -16,6 +16,7 @@ from enum import Enum
 class ProgrammingLanguage(Enum):
     JAVA = "java"
     PYTHON = "python"
+    CSHARP = "csharp"
 
 
 @dataclass(frozen=True)
