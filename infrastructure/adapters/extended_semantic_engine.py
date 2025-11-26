@@ -4876,10 +4876,12 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         code = re.sub(r'\bPutObjectRequest\b', 'BlobInfo', code)
         code = re.sub(r'\bGetObjectRequest\b', 'BlobId', code)
         # AWS SDK v2 specific patterns
-        code = re.sub(r'\bRegion\.US_EAST_1\b', 'StorageOptions.getDefaultInstance().getService()', code)
-        code = re.sub(r'\bRegion\.\w+\b', '', code)  # Remove any Region enum usage
-        code = re.sub(r'\.region\([^)]*\)', '', code, flags=re.IGNORECASE)  # Remove .region() calls
-        code = re.sub(r'\bRequestBody\b', 'ByteArrayInputStream', code)  # AWS SDK v2 RequestBody -> Java InputStream
+        # Remove Region enum references (GCP doesn't use Region enum in the same way)
+        code = re.sub(r'\.region\(Region\.\w+\)', '', code, flags=re.IGNORECASE)  # Remove .region(Region.US_EAST_1)
+        code = re.sub(r'\.region\([^)]+\)', '', code, flags=re.IGNORECASE)  # Remove any .region() calls
+        code = re.sub(r'\bRegion\.\w+\b', '', code)  # Remove standalone Region enum references
+        # Handle RequestBody (AWS SDK v2) -> Java InputStream
+        code = re.sub(r'\bRequestBody\b', 'ByteArrayInputStream', code)
         code = re.sub(r'RequestBody\.fromBytes\(', 'new ByteArrayInputStream(', code)
         code = re.sub(r'com\.amazonaws\.services\.s3', 'com.google.cloud.storage', code)
         code = re.sub(r'software\.amazon\.awssdk\.services\.s3', 'com.google.cloud.storage', code)
