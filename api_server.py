@@ -50,47 +50,40 @@ if REQUIRE_AUTH:
         if request.url.path.startswith("/api/health") or request.url.path.startswith("/static"):
             return await call_next(request)
         
-        # For root path and frontend routes, require authentication
-        # This ensures SSO is enforced for all users accessing the app
-        if request.url.path == "/" or not request.url.path.startswith("/api/"):
-            # Frontend routes require authentication
-            try:
-                user_info = await auth_middleware(request)
-                if not user_info and REQUIRE_AUTH:
-                    # If Cloud Run IAM is enabled, it should have authenticated already
-                    # If not, we need to enforce auth
-                    if not USE_CLOUD_RUN_IAM:
+        # For all routes (including root and frontend), require authentication
+        try:
+            user_info = await auth_middleware(request)
+            if REQUIRE_AUTH and not user_info:
+                # If Cloud Run IAM is enabled, check if we can extract user info from headers
+                if USE_CLOUD_RUN_IAM:
+                    # Cloud Run should have authenticated, but let's verify
+                    # Check for identity token in headers
+                    auth_header = request.headers.get("Authorization", "")
+                    if not auth_header.startswith("Bearer "):
+                        # No token - Cloud Run should have blocked this, but enforce anyway
                         raise HTTPException(
                             status_code=401,
                             detail="Authentication required. Please sign in with your Searce account."
                         )
-            except HTTPException:
-                raise
-            except Exception:
-                # If auth check fails and we require auth, block access
-                if REQUIRE_AUTH and not USE_CLOUD_RUN_IAM:
+                else:
+                    # Not using Cloud Run IAM, enforce application-level auth
                     raise HTTPException(
                         status_code=401,
                         detail="Authentication required. Please sign in with your Searce account."
                     )
-        
-        # For API endpoints, always validate authentication
-        if request.url.path.startswith("/api/"):
-            try:
-                user_info = await auth_middleware(request)
-                if not user_info and REQUIRE_AUTH:
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Authentication required. Please sign in with your Searce account."
-                    )
-            except HTTPException:
-                raise
-            except Exception:
-                if REQUIRE_AUTH:
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Authentication required. Please sign in with your Searce account."
-                    )
+            
+            # Store user info in request state for use in routes
+            if user_info:
+                request.state.user = user_info
+        except HTTPException:
+            raise
+        except Exception as e:
+            # If auth check fails and we require auth, block access
+            if REQUIRE_AUTH:
+                raise HTTPException(
+                    status_code=401,
+                    detail=f"Authentication required. Error: {str(e)}"
+                )
         
         response = await call_next(request)
         return response

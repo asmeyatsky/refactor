@@ -146,59 +146,86 @@ class SearceAuthMiddleware:
         """
         Validate Cloud Run IAM authentication
         
-        When Cloud Run IAM is enabled with --allow-unauthenticated=false:
-        - For web browsers: Cloud Run handles authentication UI/redirect automatically
+        When Cloud Run IAM is enabled with --no-allow-unauthenticated:
+        - Cloud Run validates authentication BEFORE requests reach the app
+        - For web browsers: Cloud Run redirects to Google Sign-In
         - For API calls: Client must send an identity token in Authorization header
-        - Cloud Run validates the token before the request reaches the app
         
-        Since Cloud Run already validated the request, we just need to extract user info
-        from the identity token if present.
+        We need to extract user info from the request headers that Cloud Run provides.
         """
         try:
-            # Get the Authorization header (identity token from authenticated user)
+            # Cloud Run sets these headers for authenticated requests:
+            # - X-Goog-Authenticated-User-Email: email of authenticated user
+            # - X-Goog-Authenticated-User-ID: user ID
+            # - Authorization: Bearer token (identity token)
+            
+            # Try to get email from Cloud Run headers first
+            user_email = request.headers.get("X-Goog-Authenticated-User-Email", "")
+            if user_email:
+                # Remove the "accounts.google.com:" prefix if present
+                user_email = user_email.replace("accounts.google.com:", "")
+                # Check if user is from allowed domain
+                if user_email and any(domain in user_email for domain in self.allowed_domains):
+                    return {
+                        "email": user_email,
+                        "name": request.headers.get("X-Goog-Authenticated-User-Name", ""),
+                        "auth_method": "cloud_run_iam"
+                    }
+                else:
+                    logger.warning(f"User {user_email} not from allowed domain {self.allowed_domains}")
+                    # Still return user info but mark as unauthorized domain
+                    return {
+                        "email": user_email,
+                        "name": request.headers.get("X-Goog-Authenticated-User-Name", ""),
+                        "auth_method": "cloud_run_iam",
+                        "unauthorized_domain": True
+                    }
+            
+            # Fallback: Get the Authorization header (identity token from authenticated user)
             auth_header = request.headers.get("Authorization")
-            if not auth_header or not auth_header.startswith("Bearer "):
-                # For web browser requests, Cloud Run handles auth but doesn't always
-                # forward the token. In this case, if the request reached us, it's authenticated.
-                # We'll allow it through but can't extract user info.
-                # For API requests, we require the token.
-                if request.url.path.startswith("/api/"):
-                    return None  # API requests need explicit token
-                # For web requests, Cloud Run already authenticated, allow through
-                return {"email": "authenticated@searce.com", "auth_method": "cloud_run_iam"}
-            
-            token = auth_header.split("Bearer ")[1]
-            
-            # Verify the identity token with Google
-            if GOOGLE_AUTH_AVAILABLE:
-                try:
-                    request_obj = google_requests.Request()
-                    # Verify the token (no client ID needed for Cloud Run identity tokens)
-                    idinfo = id_token.verify_oauth2_token(
-                        token, request_obj, None
-                    )
-                    
-                    # Extract user email
-                    email = idinfo.get("email", "")
-                    if not email:
-                        # Try 'sub' field which contains email for some token types
-                        email = idinfo.get("sub", "")
-                    
-                    # Check if user is from allowed domain
-                    if email and any(domain in email for domain in self.allowed_domains):
-                        return {
-                            "email": email,
-                            "name": idinfo.get("name", ""),
-                            "picture": idinfo.get("picture", ""),
-                            "auth_method": "cloud_run_iam"
-                        }
-                    else:
-                        logger.warning(f"User {email} not from allowed domain {self.allowed_domains}")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header.split("Bearer ")[1]
+                
+                # Verify the identity token with Google
+                if GOOGLE_AUTH_AVAILABLE:
+                    try:
+                        request_obj = google_requests.Request()
+                        # Verify the token (no client ID needed for Cloud Run identity tokens)
+                        idinfo = id_token.verify_oauth2_token(
+                            token, request_obj, None
+                        )
+                        
+                        # Extract user email
+                        email = idinfo.get("email", "")
+                        if not email:
+                            # Try 'sub' field which contains email for some token types
+                            email = idinfo.get("sub", "")
+                        
+                        # Check if user is from allowed domain
+                        if email and any(domain in email for domain in self.allowed_domains):
+                            return {
+                                "email": email,
+                                "name": idinfo.get("name", ""),
+                                "picture": idinfo.get("picture", ""),
+                                "auth_method": "cloud_run_iam"
+                            }
+                        else:
+                            logger.warning(f"User {email} not from allowed domain {self.allowed_domains}")
+                            return {
+                                "email": email,
+                                "name": idinfo.get("name", ""),
+                                "auth_method": "cloud_run_iam",
+                                "unauthorized_domain": True
+                            }
+                    except Exception as e:
+                        logger.debug(f"Token verification failed: {e}")
                         return None
-                except Exception as e:
-                    logger.debug(f"Token verification failed: {e}")
-                    return None
             
+            # If request reached here and Cloud Run IAM is enabled, 
+            # Cloud Run should have authenticated it, but we can't extract user info
+            # This might happen for browser requests where Cloud Run handles auth
+            # but doesn't forward all headers
+            logger.warning("Cloud Run IAM enabled but no user info found in headers")
             return None
         except Exception as e:
             logger.debug(f"Cloud Run IAM validation failed: {e}")
