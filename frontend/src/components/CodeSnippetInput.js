@@ -26,13 +26,12 @@ const CodeSnippetInput = ({
   language,
   onCodeChange,
   onLanguageChange,
-  cloudProvider,
   selectedServices,
   onServicesChange
 }) => {
   const [copied, setCopied] = useState(false);
 
-  const awsServices = [
+  const services = [
     { value: 's3', label: 'S3 → Cloud Storage' },
     { value: 'lambda', label: 'Lambda → Cloud Functions' },
     { value: 'dynamodb', label: 'DynamoDB → Firestore' },
@@ -45,21 +44,6 @@ const CodeSnippetInput = ({
     { value: 'eks', label: 'EKS → GKE' },
     { value: 'fargate', label: 'Fargate → Cloud Run' },
   ];
-
-  const azureServices = [
-    { value: 'blob_storage', label: 'Blob Storage → Cloud Storage' },
-    { value: 'functions', label: 'Functions → Cloud Functions' },
-    { value: 'cosmos_db', label: 'Cosmos DB → Firestore' },
-    { value: 'service_bus', label: 'Service Bus → Pub/Sub' },
-    { value: 'event_hubs', label: 'Event Hubs → Pub/Sub' },
-    { value: 'sql_database', label: 'SQL Database → Cloud SQL' },
-    { value: 'virtual_machines', label: 'Virtual Machines → Compute Engine' },
-    { value: 'monitor', label: 'Monitor → Cloud Monitoring' },
-    { value: 'api_management', label: 'API Management → Apigee' },
-    { value: 'aks', label: 'AKS → GKE' },
-  ];
-
-  const services = cloudProvider === 'aws' ? awsServices : azureServices;
 
   const handleCopy = async () => {
     try {
@@ -95,6 +79,8 @@ const CodeSnippetInput = ({
             <MenuItem value="python">Python</MenuItem>
             <MenuItem value="java">Java</MenuItem>
             <MenuItem value="csharp">C# (.NET)</MenuItem>
+            <MenuItem value="javascript">JavaScript / Node.js</MenuItem>
+            <MenuItem value="go">Go (Golang)</MenuItem>
           </Select>
         </FormControl>
 

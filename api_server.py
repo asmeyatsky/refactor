@@ -27,7 +27,7 @@ from application.use_cases.analyze_repository_use_case import AnalyzeRepositoryU
 from application.use_cases.execute_repository_migration_use_case import ExecuteRepositoryMigrationUseCase
 from infrastructure.adapters.s3_gcs_migration import create_multi_service_migration_system
 from infrastructure.adapters.git_adapter import GitCredentials, GitProvider
-from domain.value_objects import AWSService, AzureService, GCPService
+from domain.value_objects import AWSService, GCPService
 
 app = FastAPI(
     title="Cloud Refactor Agent API",
@@ -129,12 +129,10 @@ class MigrateResponse(BaseModel):
 def get_supported_services():
     """Get list of supported cloud services for migration"""
     aws_services = [service.value for service in AWSService]
-    azure_services = [service.value for service in AzureService]
     gcp_services = [service.value for service in GCPService]
     
     return {
         "aws_services": aws_services,
-        "azure_services": azure_services,
         "gcp_services": gcp_services
     }
 
@@ -153,8 +151,9 @@ async def migrate_code(request: MigrateRequest, background_tasks: BackgroundTask
     migration_id = f"mig_{uuid4().hex[:8]}"
     
     # Validate input
-    if request.language not in ["python", "java", "csharp", "c#"]:
-        raise HTTPException(status_code=400, detail="Unsupported language. Supported: python, java, csharp, c#")
+    supported_languages = ["python", "java", "csharp", "c#", "javascript", "js", "nodejs", "node", "go", "golang"]
+    if request.language not in supported_languages:
+        raise HTTPException(status_code=400, detail=f"Unsupported language. Supported: {', '.join(supported_languages)}")
     
     if not request.services:
         raise HTTPException(status_code=400, detail="At least one service must be selected")

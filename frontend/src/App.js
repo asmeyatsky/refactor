@@ -31,7 +31,6 @@ import {
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
-import CloudProviderSelection from './components/CloudProviderSelection';
 import InputMethodSelection from './components/InputMethodSelection';
 import CodeSnippetInput from './components/CodeSnippetInput';
 import RepositoryInput from './components/RepositoryInput';
@@ -64,11 +63,10 @@ const theme = createTheme({
   },
 });
 
-const steps = ['Select Cloud Provider', 'Choose Input Method', 'Provide Code/Repository', 'Review & Refactor'];
+const steps = ['Choose Input Method', 'Provide Code/Repository', 'Review & Refactor'];
 
 const App = () => {
   const [activeStep, setActiveStep] = useState(0);
-  const [cloudProvider, setCloudProvider] = useState(null); // 'aws' or 'azure'
   const [inputMethod, setInputMethod] = useState(null); // 'code' or 'repository'
   const [codeSnippet, setCodeSnippet] = useState('');
   const [repositoryUrl, setRepositoryUrl] = useState('');
@@ -104,15 +102,11 @@ const App = () => {
   }, []);
 
   const handleNext = () => {
-    if (activeStep === 0 && !cloudProvider) {
-      setError('Please select a cloud provider');
-      return;
-    }
-    if (activeStep === 1 && !inputMethod) {
+    if (activeStep === 0 && !inputMethod) {
       setError('Please select an input method');
       return;
     }
-    if (activeStep === 2) {
+    if (activeStep === 1) {
       if (inputMethod === 'code' && !codeSnippet.trim()) {
         setError('Please provide code to refactor');
         return;
@@ -143,7 +137,6 @@ const App = () => {
     }
     
     setActiveStep(0);
-    setCloudProvider(null);
     setInputMethod(null);
     setCodeSnippet('');
     setRepositoryUrl('');
@@ -207,8 +200,7 @@ const App = () => {
         const initialResponse = await migrateCodeSnippet({
           code: codeSnippet,
           language,
-          services: selectedServices,
-          cloudProvider
+          services: selectedServices
         });
         
         // Poll for completion
@@ -395,19 +387,12 @@ const App = () => {
     switch (activeStep) {
       case 0:
         return (
-          <CloudProviderSelection
-            selectedProvider={cloudProvider}
-            onSelect={setCloudProvider}
-          />
-        );
-      case 1:
-        return (
           <InputMethodSelection
             selectedMethod={inputMethod}
             onSelect={setInputMethod}
           />
         );
-      case 2:
+      case 1:
         if (inputMethod === 'code') {
           return (
             <CodeSnippetInput
@@ -415,7 +400,6 @@ const App = () => {
               language={language}
               onCodeChange={setCodeSnippet}
               onLanguageChange={setLanguage}
-              cloudProvider={cloudProvider}
               selectedServices={selectedServices}
               onServicesChange={setSelectedServices}
             />
@@ -430,7 +414,6 @@ const App = () => {
                 onAnalyze={handleAnalyzeRepository}
                 analysisResult={analysisResult}
                 loading={analyzing}
-                cloudProvider={cloudProvider}
                 selectedServices={selectedServices}
                 onServicesChange={setSelectedServices}
                 onClearAnalysis={() => {
@@ -441,12 +424,11 @@ const App = () => {
               />
             );
         }
-      case 3:
+      case 2:
         return (
           <MigrationResults
             result={migrationResult}
             inputMethod={inputMethod}
-            cloudProvider={cloudProvider}
             onReset={handleReset}
           />
         );
@@ -465,12 +447,6 @@ const App = () => {
             <Typography variant="h6" component="div" sx={{ flexGrow: 1, color: 'white', fontWeight: 500 }}>
               Universal Cloud Refactor Agent
             </Typography>
-            {cloudProvider && (
-              <Chip
-                label={cloudProvider.toUpperCase()}
-                sx={{ bgcolor: 'rgba(255,255,255,0.2)', color: 'white', fontWeight: 500 }}
-              />
-            )}
           </Toolbar>
         </AppBar>
 
@@ -482,7 +458,7 @@ const App = () => {
                   Cloud Migration Assistant
                 </Typography>
                 <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                  Transform your {cloudProvider ? cloudProvider.toUpperCase() : 'cloud'} infrastructure to Google Cloud Platform
+                  Transform your AWS infrastructure to Google Cloud Platform
                 </Typography>
               </Box>
 
@@ -615,7 +591,7 @@ const App = () => {
                         variant="contained"
                         onClick={handleNext}
                         disabled={
-                          (activeStep === 0 && !cloudProvider) ||
+                          (activeStep === 0 && !inputMethod) ||
                           (activeStep === 1 && !inputMethod)
                         }
                         sx={{ minWidth: 120 }}

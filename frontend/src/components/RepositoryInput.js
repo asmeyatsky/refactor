@@ -36,7 +36,6 @@ const RepositoryInput = ({
   onAnalyze,
   analysisResult,
   loading,
-  cloudProvider,
   selectedServices,
   onServicesChange,
   onClearAnalysis

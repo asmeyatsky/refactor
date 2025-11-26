@@ -24,7 +24,7 @@ import {
   AutoAwesome as AutoAwesomeIcon
 } from '@mui/icons-material';
 
-const MigrationResults = ({ result, inputMethod, cloudProvider, onReset }) => {
+const MigrationResults = ({ result, inputMethod, onReset }) => {
   const [copied, setCopied] = useState(false);
   
   // Debug logging
@@ -358,17 +358,6 @@ const MigrationResults = ({ result, inputMethod, cloudProvider, onReset }) => {
                 </Alert>
               )}
               
-              {result.validation.azure_patterns_found && result.validation.azure_patterns_found.length > 0 && (
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  <Typography variant="subtitle2" gutterBottom>Azure Patterns Found:</Typography>
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 1 }}>
-                    {result.validation.azure_patterns_found.map((pattern, idx) => (
-                      <Chip key={idx} label={pattern} size="small" variant="outlined" />
-                    ))}
-                  </Box>
-                </Alert>
-              )}
-              
               {result.validation.syntax_valid && result.validation.gcp_api_correct && 
                (!result.validation.errors || result.validation.errors.length === 0) && (
                 <Alert severity="success">
@@ -433,16 +422,6 @@ const MigrationResults = ({ result, inputMethod, cloudProvider, onReset }) => {
                           <Typography variant="caption" color="text.secondary">AWS Patterns:</Typography>
                           <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
                             {validation.aws_patterns_found.map((pattern, idx) => (
-                              <Chip key={idx} label={pattern} size="small" variant="outlined" />
-                            ))}
-                          </Box>
-                        </Box>
-                      )}
-                      {validation.azure_patterns_found && validation.azure_patterns_found.length > 0 && (
-                        <Box>
-                          <Typography variant="caption" color="text.secondary">Azure Patterns:</Typography>
-                          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mt: 0.5 }}>
-                            {validation.azure_patterns_found.map((pattern, idx) => (
                               <Chip key={idx} label={pattern} size="small" variant="outlined" />
                             ))}
                           </Box>

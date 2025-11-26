@@ -3,7 +3,7 @@ Validate GCP Code Use Case
 
 Architectural Intent:
 - Validates that refactored code is correct for Google Cloud Platform
-- Checks for AWS/Azure patterns, syntax errors, and GCP API correctness
+- Checks for AWS patterns, syntax errors, and GCP API correctness
 - Provides detailed validation results with progress tracking
 """
 
@@ -62,16 +62,6 @@ class ValidateGCPCodeUseCase:
         'modify_db_instance', 'DBInstanceIdentifier', 'DBInstanceClass',
         'Engine', 'MasterUsername', 'MasterUserPassword', 'AllocatedStorage',
         'RDS_ENDPOINT', 'RDS_HOST', 'RDS_DB_NAME', 'RDS_USERNAME', 'RDS_PASSWORD'
-    ]
-    
-    # Azure patterns to detect
-    AZURE_PATTERNS = [
-        'azure.storage', 'azure.functions', 'azure.cosmos', 
-        'azure.servicebus', 'azure.eventhub', 'BlobServiceClient',
-        'CosmosClient', 'ServiceBusClient', 'EventHubProducerClient',
-        'AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_LOCATION',
-        'AZURE_STORAGE_CONTAINER', 'azure.core', 'azure.identity',
-        'BlobClient', 'ContainerClient', 'QueueClient', 'TopicClient'
     ]
     
     # GCP patterns that should be present
@@ -151,7 +141,6 @@ class ValidateGCPCodeUseCase:
         errors = []
         warnings = []
         aws_patterns_found = []
-        azure_patterns_found = []
         
         if progress_callback:
             progress_callback("Starting validation...", 0.0)
@@ -173,33 +162,16 @@ class ValidateGCPCodeUseCase:
             errors.append(f"Found {len(aws_patterns_found)} AWS patterns in code")
             warnings.append("Code may not be fully migrated to GCP")
         
-        # Step 3: Check for Azure patterns (60%)
-        # Only check Azure patterns if no AWS patterns were found
-        # This prevents false positives when validating AWS service migrations
-        azure_patterns_found = []
-        if not aws_patterns_found:
-            azure_patterns_found = self._detect_azure_patterns(code)
-            if progress_callback:
-                progress_callback(f"Found {len(azure_patterns_found)} Azure patterns", 60.0)
-            
-            if azure_patterns_found:
-                errors.append(f"Found {len(azure_patterns_found)} Azure patterns in code")
-                warnings.append("Code may not be fully migrated to GCP")
-        else:
-            # Skip Azure check if AWS patterns found (likely AWS migration)
-            if progress_callback:
-                progress_callback("Skipping Azure pattern check (AWS patterns detected)", 60.0)
-        
-        # Step 4: Check GCP API correctness (80%)
+        # Step 3: Check GCP API correctness (60%)
         gcp_api_correct = self._validate_gcp_apis(code, language)
         if progress_callback:
             progress_callback("GCP API validation complete", 80.0)
         
         # Only warn about GCP API if:
-        # 1. We found AWS/Azure patterns (meaning migration was attempted)
+        # 1. We found AWS patterns (meaning migration was attempted)
         # 2. AND GCP APIs are not detected
         # This prevents false positives for code that doesn't use cloud services
-        if not gcp_api_correct and (aws_patterns_found or azure_patterns_found):
+        if not gcp_api_correct and aws_patterns_found:
             # Check if code actually uses cloud services (not just simple Python code)
             has_cloud_operations = any(pattern in code.lower() for pattern in [
                 'client', 'bucket', 'blob', 'collection', 'document', 'topic', 
@@ -208,8 +180,8 @@ class ValidateGCPCodeUseCase:
             if has_cloud_operations:
                 warnings.append("GCP API usage may be incorrect or incomplete - verify GCP SDK imports and client initialization")
         
-        # Step 5: Advanced LLM validation if available (100%)
-        if self.llm_provider and (aws_patterns_found or azure_patterns_found):
+        # Step 4: Advanced LLM validation if available (100%)
+        if self.llm_provider and aws_patterns_found:
             llm_validation = self._llm_validate(code, language)
             if progress_callback:
                 progress_callback("Advanced validation complete", 100.0)
@@ -227,13 +199,13 @@ class ValidateGCPCodeUseCase:
             errors=errors,
             warnings=warnings,
             aws_patterns_found=aws_patterns_found,
-            azure_patterns_found=azure_patterns_found,
+            azure_patterns_found=[],  # Always empty - Azure not supported
             syntax_valid=syntax_valid,
             gcp_api_correct=gcp_api_correct,
             validation_details={
-                'total_patterns_found': len(aws_patterns_found) + len(azure_patterns_found),
+                'total_patterns_found': len(aws_patterns_found),
                 'has_aws_patterns': len(aws_patterns_found) > 0,
-                'has_azure_patterns': len(azure_patterns_found) > 0,
+                'has_azure_patterns': False,
                 'language': language
             }
         )
@@ -271,6 +243,26 @@ class ValidateGCPCodeUseCase:
                 if 'using' not in code and 'namespace' not in code:
                     return False
                 # Check for balanced braces
+                open_braces = code.count('{')
+                close_braces = code.count('}')
+                if open_braces != close_braces:
+                    return False
+                return True
+            elif language in ['javascript', 'js', 'nodejs', 'node']:
+                # Basic JavaScript syntax check
+                # Check for balanced braces and parentheses
+                open_braces = code.count('{')
+                close_braces = code.count('}')
+                open_parens = code.count('(')
+                close_parens = code.count(')')
+                if open_braces != close_braces or open_parens != close_parens:
+                    return False
+                return True
+            elif language in ['go', 'golang']:
+                # Basic Go syntax check
+                # Check for balanced braces and package declaration
+                if 'package' not in code:
+                    return False
                 open_braces = code.count('{')
                 close_braces = code.count('}')
                 if open_braces != close_braces:
@@ -323,6 +315,37 @@ class ValidateGCPCodeUseCase:
                 'SNSClient',
             ]
             patterns_to_check = list(self.AWS_PATTERNS) + csharp_patterns
+        elif language in ['javascript', 'js', 'nodejs', 'node']:
+            # Add JavaScript/Node.js-specific AWS patterns
+            javascript_patterns = [
+                'aws-sdk',
+                '@aws-sdk',
+                'AWS.S3',
+                'AWS.DynamoDB',
+                'AWS.Lambda',
+                'AWS.SQS',
+                'AWS.SNS',
+                'S3Client',
+                'DynamoDBClient',
+                'LambdaClient',
+                'SQSClient',
+                'SNSClient',
+            ]
+            patterns_to_check = list(self.AWS_PATTERNS) + javascript_patterns
+        elif language in ['go', 'golang']:
+            # Add Go-specific AWS patterns
+            go_patterns = [
+                'github.com/aws/aws-sdk-go',
+                'github.com/aws/aws-sdk-go-v2',
+                's3.New',
+                'dynamodb.New',
+                'lambda.New',
+                'sqs.New',
+                'sns.New',
+                's3iface',
+                'dynamodbiface',
+            ]
+            patterns_to_check = list(self.AWS_PATTERNS) + go_patterns
         
         # Check literal patterns - be more precise to avoid false positives
         for pattern in patterns_to_check:
@@ -459,17 +482,6 @@ class ValidateGCPCodeUseCase:
         # Last resort: return simplified pattern
         return regex_pattern.replace(r'\b', '').replace(r'\s*', ' ').replace(r'\w+', 'method').replace('\\', '')[:50]
     
-    def _detect_azure_patterns(self, code: str) -> List[str]:
-        """Detect Azure patterns in code"""
-        found_patterns = []
-        code_lower = code.lower()
-        
-        for pattern in self.AZURE_PATTERNS:
-            if pattern.lower() in code_lower or pattern in code:
-                found_patterns.append(pattern)
-        
-        return list(set(found_patterns))  # Remove duplicates
-    
     def _validate_gcp_apis(self, code: str, language: str) -> bool:
         """Validate that GCP APIs are used correctly"""
         if language in ['csharp', 'c#']:
@@ -589,7 +601,7 @@ class ValidateGCPCodeUseCase:
                 except Exception:
                     return {'has_issues': False}
             
-            prompt = f"""Analyze this {language} code that was refactored from AWS/Azure to Google Cloud Platform.
+            prompt = f"""Analyze this {language} code that was refactored from AWS to Google Cloud Platform.
 
 Code:
 ```{language}
@@ -597,7 +609,7 @@ Code:
 ```
 
 Check for:
-1. Any remaining AWS or Azure patterns
+1. Any remaining AWS patterns
 2. Incorrect GCP API usage
 3. Missing GCP imports
 4. Syntax errors
