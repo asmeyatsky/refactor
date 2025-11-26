@@ -1080,6 +1080,43 @@ def health_check():
     return {"status": "healthy", "timestamp": datetime.now()}
 
 
+@app.get("/api/auth/user")
+async def get_current_user(request: Request):
+    """Get current authenticated user information"""
+    if not REQUIRE_AUTH:
+        return {"authenticated": False, "message": "Authentication not required"}
+    
+    # User info should be set by middleware
+    if hasattr(request.state, 'user'):
+        user_info = request.state.user
+        return {
+            "authenticated": True,
+            "email": user_info.get("email", "unknown"),
+            "name": user_info.get("name", ""),
+            "auth_method": user_info.get("auth_method", "unknown"),
+            "unauthorized_domain": user_info.get("unauthorized_domain", False)
+        }
+    else:
+        # Try to get user info from middleware
+        try:
+            user_info = await auth_middleware(request)
+            if user_info:
+                return {
+                    "authenticated": True,
+                    "email": user_info.get("email", "unknown"),
+                    "name": user_info.get("name", ""),
+                    "auth_method": user_info.get("auth_method", "unknown"),
+                    "unauthorized_domain": user_info.get("unauthorized_domain", False)
+                }
+        except Exception as e:
+            pass
+        
+        return {
+            "authenticated": False,
+            "message": "No authentication information found"
+        }
+
+
 # Serve static frontend files (for Cloud Run deployment)
 # This must be added AFTER all API routes
 frontend_build_path = Path(__file__).parent / "frontend" / "build"
@@ -1098,6 +1135,11 @@ if frontend_build_path.exists():
         # Don't serve static files (already handled by mount)
         if full_path.startswith("static/"):
             raise HTTPException(status_code=404, detail="Not found")
+        
+        # User should be authenticated by middleware
+        user_email = "unknown"
+        if hasattr(request.state, 'user'):
+            user_email = request.state.user.get("email", "unknown")
         
         # Serve index.html for all frontend routes
         index_path = frontend_build_path / "index.html"
