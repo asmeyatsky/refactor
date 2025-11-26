@@ -334,6 +334,8 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         smooth_progress_update(0.0, 5.0, "Initializing refactoring...", steps=3, is_refactoring=True)
         
         # Map language string to enum (normalize aliases first)
+        if not request.language:
+            raise ValueError("Language is required")
         language_normalized = request.language.lower()
         # Normalize aliases to canonical names
         if language_normalized in ['js', 'nodejs', 'node']:

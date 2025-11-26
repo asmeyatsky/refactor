@@ -181,7 +181,7 @@ def validate_code_semantics(code_content: str, language: str) -> List[str]:
     issues = []
     
     # Check for syntactic consistency
-    if language.lower() == 'python':
+    if language and language.lower() == 'python':
         # Check for obvious Python syntax issues
         if code_content.count('(') != code_content.count(')'):
             issues.append("Unbalanced parentheses detected")

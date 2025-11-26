@@ -431,7 +431,11 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
         # Extract ALL needed values from task BEFORE any operations
         # This ensures task is not captured in any closure
         file_path_str = str(task.file_path)
+        if not codebase.language:
+            raise ValueError("Codebase language is required")
         lang_value = codebase.language.value
+        if not lang_value:
+            raise ValueError("Codebase language value is required")
         llm_provider_ref = self.llm_provider
         
         # Use provided content or read file content
@@ -539,6 +543,8 @@ def _transform_code_standalone(
         content = ast_engine._aggressive_aws_cleanup(content)
     
     # Normalize language aliases for transformation engine
+    if not language:
+        raise ValueError("Language is required for transformation")
     language_normalized = language.lower()
     if language_normalized in ['js', 'nodejs', 'node']:
         language_normalized = 'javascript'
