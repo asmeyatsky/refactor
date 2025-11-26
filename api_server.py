@@ -37,6 +37,8 @@ app = FastAPI(
 
 # Add authentication middleware if enabled
 REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "false").lower() == "true"
+USE_CLOUD_RUN_IAM = os.getenv("USE_CLOUD_RUN_IAM", "false").lower() == "true"
+
 if REQUIRE_AUTH:
     from infrastructure.adapters.auth_middleware import create_auth_middleware
     auth_middleware = create_auth_middleware()
@@ -44,24 +46,51 @@ if REQUIRE_AUTH:
     @app.middleware("http")
     async def authentication_middleware_handler(request: Request, call_next):
         """Authentication middleware handler"""
-        # Allow health checks, static files, and root path (frontend) without auth
-        # Frontend will handle SSO authentication when users interact with features
-        if (request.url.path.startswith("/api/health") or 
-            request.url.path.startswith("/static") or 
-            request.url.path == "/" or
-            not request.url.path.startswith("/api/")):
+        # Allow health checks and static files without auth
+        if request.url.path.startswith("/api/health") or request.url.path.startswith("/static"):
             return await call_next(request)
         
-        # Validate authentication
-        # When Cloud Run IAM is enabled, Cloud Run handles authentication at platform level
-        # so requests reaching here are already authenticated
-        try:
-            user_info = await auth_middleware(request)
-            # If authentication fails, auth_middleware will raise HTTPException
-            # If it returns None or user_info, proceed
-        except Exception as e:
-            # If auth middleware raises an exception, let it propagate (it's an HTTPException)
-            raise
+        # For root path and frontend routes, require authentication
+        # This ensures SSO is enforced for all users accessing the app
+        if request.url.path == "/" or not request.url.path.startswith("/api/"):
+            # Frontend routes require authentication
+            try:
+                user_info = await auth_middleware(request)
+                if not user_info and REQUIRE_AUTH:
+                    # If Cloud Run IAM is enabled, it should have authenticated already
+                    # If not, we need to enforce auth
+                    if not USE_CLOUD_RUN_IAM:
+                        raise HTTPException(
+                            status_code=401,
+                            detail="Authentication required. Please sign in with your Searce account."
+                        )
+            except HTTPException:
+                raise
+            except Exception:
+                # If auth check fails and we require auth, block access
+                if REQUIRE_AUTH and not USE_CLOUD_RUN_IAM:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Authentication required. Please sign in with your Searce account."
+                    )
+        
+        # For API endpoints, always validate authentication
+        if request.url.path.startswith("/api/"):
+            try:
+                user_info = await auth_middleware(request)
+                if not user_info and REQUIRE_AUTH:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Authentication required. Please sign in with your Searce account."
+                    )
+            except HTTPException:
+                raise
+            except Exception:
+                if REQUIRE_AUTH:
+                    raise HTTPException(
+                        status_code=401,
+                        detail="Authentication required. Please sign in with your Searce account."
+                    )
         
         response = await call_next(request)
         return response

@@ -77,14 +77,10 @@ class SearceAuthMiddleware:
         Raises:
             HTTPException if authentication fails
         """
-        # Skip auth for health checks, public endpoints, and frontend routes
-        # Frontend will handle SSO authentication when users interact with features
-        public_paths = ["/api/health", "/docs", "/openapi.json", "/favicon.ico", "/static", "/"]
-        if any(request.url.path.startswith(path) or request.url.path == path for path in public_paths):
-            return None
-        
-        # Skip auth for non-API paths (frontend routes)
-        if not request.url.path.startswith("/api/"):
+        # Only skip auth for health checks and static files
+        # All other routes (including frontend) require authentication
+        public_paths = ["/api/health", "/static"]
+        if any(request.url.path.startswith(path) for path in public_paths):
             return None
         
         # Skip auth if not required
