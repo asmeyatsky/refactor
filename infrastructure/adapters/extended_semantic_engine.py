@@ -934,6 +934,27 @@ class ExtendedASTTransformationEngine:
         result = re.sub(r'\blambda_client\b', 'functions_client', result)
         
         # STEP 3: Fix AWS API method calls
+        # s3_client.upload_file(file_name, bucket, object_name) -> GCS upload_from_filename
+        result = re.sub(
+            r'(\w+)\.upload_file\s*\(\s*([^,]+),\s*([^,]+),\s*([^\)]+)\s*\)',
+            r'storage_client = storage.Client()\n    bucket = storage_client.bucket(\3)\n    blob = bucket.blob(\4)\n    blob.upload_from_filename(\2)',
+            result,
+            flags=re.DOTALL
+        )
+        # Also handle upload_file with s3_client explicitly
+        result = re.sub(
+            r's3_client\.upload_file\s*\(\s*([^,]+),\s*([^,]+),\s*([^\)]+)\s*\)',
+            r'storage_client = storage.Client()\n    bucket = storage_client.bucket(\2)\n    blob = bucket.blob(\3)\n    blob.upload_from_filename(\1)',
+            result,
+            flags=re.DOTALL
+        )
+        # s3_client.download_file(bucket, key, local_file) -> GCS download_to_filename
+        result = re.sub(
+            r'(\w+)\.download_file\s*\(\s*([^,]+),\s*([^,]+),\s*([^\)]+)\s*\)',
+            r'storage_client = storage.Client()\n    bucket = storage_client.bucket(\2)\n    blob = bucket.blob(\3)\n    blob.download_to_filename(\4)',
+            result,
+            flags=re.DOTALL
+        )
         # s3_client.get_object(Bucket=..., Key=...) -> bucket.blob pattern
         result = re.sub(
             r'(\w+)\s*=\s*(\w+)\.get_object\s*\(\s*Bucket\s*=\s*([^,]+),\s*Key\s*=\s*([^,\)]+)\s*\)',

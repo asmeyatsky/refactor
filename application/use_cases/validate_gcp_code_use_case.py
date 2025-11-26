@@ -377,6 +377,29 @@ class ValidateGCPCodeUseCase:
             else:
                 matches = re.findall(pattern, code, re.IGNORECASE)
                 if matches:
+                    # For upload_file, download_file, etc. - only flag if called on AWS clients
+                    # Don't flag if called on GCP clients (storage_client, bucket, blob, etc.)
+                    if pattern in [r'\w+\s*\.\s*upload_file\s*\(', r'\w+\s*\.\s*download_file\s*\(']:
+                        # Check if it's called on AWS client (s3_client, s3, etc.) vs GCP client
+                        aws_client_pattern = r'(s3_client|s3|boto3\.client\([\'"]s3)'
+                        gcp_client_pattern = r'(storage_client|bucket|blob|storage\.Client)'
+                        is_aws_call = False
+                        for match in matches:
+                            # Find the context around the match
+                            match_pos = code.lower().find(match.lower())
+                            if match_pos >= 0:
+                                # Check 50 chars before the match for client name
+                                context_start = max(0, match_pos - 50)
+                                context = code[context_start:match_pos + len(match)]
+                                if re.search(aws_client_pattern, context, re.IGNORECASE):
+                                    is_aws_call = True
+                                    break
+                                elif re.search(gcp_client_pattern, context, re.IGNORECASE):
+                                    # It's a GCP call, skip it
+                                    continue
+                        if not is_aws_call:
+                            continue  # Skip this pattern - might be GCP code
+                    
                     # Extract meaningful pattern name from regex
                     pattern_name = self._extract_pattern_name(pattern, matches[0] if matches else None)
                     if pattern_name and pattern_name not in found_patterns:
