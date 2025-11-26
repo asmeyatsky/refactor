@@ -26,7 +26,8 @@ import {
   Storage as StorageIcon,
   AutoAwesome as AutoAwesomeIcon,
   CheckCircle as CheckCircleIcon,
-  RadioButtonUnchecked as RadioButtonUncheckedIcon
+  RadioButtonUnchecked as RadioButtonUncheckedIcon,
+  SmartToy as SmartToyIcon
 } from '@mui/icons-material';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
@@ -235,7 +236,7 @@ const App = () => {
                   ...statusResponse.result
                 };
                 setMigrationResult(finalResult);
-                setActiveStep(3);
+                setActiveStep(2); // Step 2 is now "Review & Refactor" (last step)
                 setMigrating(false);
               } else if (statusResponse.status === 'failed') {
                 // Cleanup
@@ -269,7 +270,7 @@ const App = () => {
         } else {
           // Fallback if no migration_id
           setMigrationResult(initialResponse);
-          setActiveStep(3);
+          setActiveStep(2); // Step 2 is now "Review & Refactor" (last step)
           setMigrating(false);
         }
       } else {
@@ -329,7 +330,7 @@ const App = () => {
                 console.log('App.js - refactored_files:', finalResult?.refactored_files);
                 console.log('App.js - files_changed:', finalResult?.files_changed);
                 setMigrationResult(finalResult);
-                setActiveStep(3);
+                setActiveStep(2); // Step 2 is now "Review & Refactor" (last step)
                 setMigrating(false);
               } else if (statusResponse.status === 'failed') {
                 // Cleanup
@@ -503,53 +504,62 @@ const App = () => {
                 <Box sx={{ minHeight: 400 }}>
                   {renderStepContent()}
                   
-                  {/* Show progress bars when migrating */}
-                  {migrating && (
+                  {/* Show progress bars when migrating or on results page with progress */}
+                  {(migrating || (activeStep === 2 && (progress.refactoring.progress > 0 || progress.validation.progress > 0))) && (
                     <Box sx={{ mt: 3 }}>
-                      <Paper elevation={2} sx={{ p: 3, bgcolor: 'background.paper' }}>
-                        <Typography variant="h6" gutterBottom sx={{ mb: 2 }}>
-                          Refactoring Progress
-                        </Typography>
+                      <Paper elevation={2} sx={{ p: 3, bgcolor: 'background.paper', borderRadius: 2 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
+                          <AutoAwesomeIcon sx={{ mr: 1, color: 'primary.main' }} />
+                          <Typography variant="h6" gutterBottom sx={{ mb: 0, fontWeight: 600 }}>
+                            Refactoring Progress
+                          </Typography>
+                        </Box>
                         
-                        {/* Refactoring Progress */}
+                        {/* Refactoring Agent Progress */}
                         <Box sx={{ mb: 3 }}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                            <Typography variant="body2" color="text.secondary">
-                              Refactoring Agent
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                              <SmartToyIcon sx={{ mr: 1, fontSize: 18, color: 'primary.main' }} />
+                              <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                                🤖 Refactoring Agent
+                              </Typography>
+                            </Box>
+                            <Typography variant="body1" sx={{ fontWeight: 600, color: 'primary.main' }}>
                               {Math.round(progress.refactoring.progress)}%
                             </Typography>
                           </Box>
                           <LinearProgress 
                             variant="determinate" 
                             value={progress.refactoring.progress} 
-                            sx={{ height: 8, borderRadius: 4 }}
+                            sx={{ height: 10, borderRadius: 5 }}
                             color="primary"
                           />
-                          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                            {progress.refactoring.message}
+                          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontStyle: 'italic' }}>
+                            {progress.refactoring.message || 'Processing your code...'}
                           </Typography>
                         </Box>
                         
-                        {/* Validation Progress - Always show */}
-                        <Box sx={{ mt: 3 }}>
-                          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
-                            <Typography variant="body2" color="text.secondary">
-                              Validation Agent
-                            </Typography>
-                            <Typography variant="body2" color="text.secondary">
+                        {/* Validation Agent Progress */}
+                        <Box>
+                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
+                            <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                              <SmartToyIcon sx={{ mr: 1, fontSize: 18, color: 'secondary.main' }} />
+                              <Typography variant="body1" sx={{ fontWeight: 500 }}>
+                                🔍 Validation Agent
+                              </Typography>
+                            </Box>
+                            <Typography variant="body1" sx={{ fontWeight: 600, color: 'secondary.main' }}>
                               {Math.round(progress.validation.progress)}%
                             </Typography>
                           </Box>
                           <LinearProgress 
                             variant="determinate" 
                             value={progress.validation.progress} 
-                            sx={{ height: 8, borderRadius: 4 }}
+                            sx={{ height: 10, borderRadius: 5 }}
                             color="secondary"
                           />
-                          <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: 'block' }}>
-                            {progress.validation.message}
+                          <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block', fontStyle: 'italic' }}>
+                            {progress.validation.message || 'Validating transformed code...'}
                           </Typography>
                         </Box>
                       </Paper>
@@ -575,7 +585,7 @@ const App = () => {
                       >
                         New Refactoring
                       </Button>
-                    ) : activeStep === 2 ? (
+                    ) : activeStep === 1 ? (
                       <Button
                         variant="contained"
                         onClick={handleMigrate}
