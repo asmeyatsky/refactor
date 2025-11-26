@@ -59,14 +59,22 @@ else
     echo -e "${GREEN}Service account already exists${NC}"
 fi
 
-# Check for required environment variables
-if [ -z "${GEMINI_API_KEY}" ]; then
+# Check for GEMINI_API_KEY - try to get from existing service first, then from environment
+EXISTING_GEMINI_KEY=$(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format="value(spec.template.spec.containers[0].env[?(@.name=='GEMINI_API_KEY')].value)" 2>/dev/null || echo "")
+
+if [ -n "${EXISTING_GEMINI_KEY}" ]; then
+    echo -e "${GREEN}Found existing GEMINI_API_KEY in service, preserving it${NC}"
+    GEMINI_API_KEY="${EXISTING_GEMINI_KEY}"
+elif [ -z "${GEMINI_API_KEY}" ]; then
     echo -e "${YELLOW}Warning: GEMINI_API_KEY not set. The service may not work without it.${NC}"
     echo -e "${YELLOW}You can set it later with:${NC}"
     echo "  gcloud run services update ${SERVICE_NAME} --region ${REGION} --update-env-vars GEMINI_API_KEY=your-key"
-    ENV_VARS="REQUIRE_AUTH=true,ALLOWED_EMAIL_DOMAINS=@searce.com,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},USE_CLOUD_RUN_IAM=true"
-else
-    ENV_VARS="REQUIRE_AUTH=true,ALLOWED_EMAIL_DOMAINS=@searce.com,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},USE_CLOUD_RUN_IAM=true,GEMINI_API_KEY=${GEMINI_API_KEY}"
+fi
+
+# Build environment variables - always include GEMINI_API_KEY if we have it
+ENV_VARS="REQUIRE_AUTH=true,ALLOWED_EMAIL_DOMAINS=@searce.com,GCP_PROJECT_ID=${PROJECT_ID},GCP_REGION=${REGION},USE_CLOUD_RUN_IAM=true"
+if [ -n "${GEMINI_API_KEY}" ]; then
+    ENV_VARS="${ENV_VARS},GEMINI_API_KEY=${GEMINI_API_KEY}"
 fi
 
 # Build and push using Cloud Build (ensures correct architecture for Cloud Run)
@@ -75,6 +83,7 @@ gcloud builds submit --tag ${IMAGE_NAME}:latest --timeout=20m
 
 # Deploy to Cloud Run with authentication required
 echo -e "${YELLOW}Deploying to Cloud Run...${NC}"
+# Use --update-env-vars instead of --set-env-vars to preserve existing env vars
 gcloud run deploy ${SERVICE_NAME} \
     --image ${IMAGE_NAME}:latest \
     --platform managed \
@@ -85,7 +94,7 @@ gcloud run deploy ${SERVICE_NAME} \
     --timeout 300 \
     --max-instances 10 \
     --min-instances 0 \
-    --set-env-vars "${ENV_VARS}" \
+    --update-env-vars "${ENV_VARS}" \
     --service-account ${SERVICE_ACCOUNT_EMAIL}
 
 # Allow Searce domain and specific users to access (SSO will be enforced)
