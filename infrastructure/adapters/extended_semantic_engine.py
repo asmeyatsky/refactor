@@ -856,6 +856,48 @@ class ExtendedASTTransformationEngine:
             result,
             flags=re.DOTALL | re.IGNORECASE
         )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]rds[\'\"][^\)]*\)',
+            r'\1 = None  # RDS management replaced with Cloud SQL Admin API',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]ec2[\'\"][^\)]*\)',
+            r'\1 = compute_v1.InstancesClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]cloudwatch[\'\"][^\)]*\)',
+            r'\1 = monitoring_v3.MetricServiceClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]apigateway[\'\"][^\)]*\)',
+            r'\1 = None  # API Gateway replaced with Apigee API',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]eks[\'\"][^\)]*\)',
+            r'\1 = container_v1.ClusterManagerClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]ecs[\'\"][^\)]*\)',
+            r'\1 = run_v2.ServicesClient()  # ECS/Fargate replaced with Cloud Run',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
+        result = re.sub(
+            r'(\w+)\s*=\s*boto3\s*\.\s*client\s*\(\s*[\'\"]lambda[\'\"][^\)]*\)',
+            r'\1 = functions_v1.CloudFunctionsServiceClient()',
+            result,
+            flags=re.DOTALL | re.IGNORECASE
+        )
         
         # STEP 1.5: Also catch boto3.client() without variable assignment
         result = re.sub(
@@ -883,6 +925,13 @@ class ExtendedASTTransformationEngine:
         result = re.sub(r'\bsqs_client\b', 'pubsub_publisher', result)
         result = re.sub(r'\bsns_client\b', 'pubsub_publisher', result)
         result = re.sub(r'\bs3_client\b', 'storage_client', result)
+        result = re.sub(r'\brds_client\b', 'cloud_sql_client', result)
+        result = re.sub(r'\bec2_client\b', 'compute_client', result)
+        result = re.sub(r'\bcloudwatch_client\b', 'monitoring_client', result)
+        result = re.sub(r'\bapigateway_client\b', 'apigee_client', result)
+        result = re.sub(r'\beks_client\b', 'gke_client', result)
+        result = re.sub(r'\becs_client\b', 'cloud_run_client', result)
+        result = re.sub(r'\blambda_client\b', 'functions_client', result)
         
         # STEP 3: Fix AWS API method calls
         # s3_client.get_object(Bucket=..., Key=...) -> bucket.blob pattern
@@ -998,6 +1047,67 @@ class ExtendedASTTransformationEngine:
         # STEP 10: Remove boto3 imports
         result = re.sub(r'^import boto3\s*$', '', result, flags=re.MULTILINE)
         result = re.sub(r'^from boto3.*$', '', result, flags=re.MULTILINE)
+        
+        # STEP 11: Add required imports for additional services
+        if 'compute_v1.InstancesClient()' in result or 'compute_client' in result:
+            if 'from google.cloud import compute_v1' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import compute_v1')
+                result = '\n'.join(lines)
+        
+        if 'monitoring_v3.MetricServiceClient()' in result or 'monitoring_client' in result:
+            if 'from google.cloud import monitoring_v3' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import monitoring_v3')
+                result = '\n'.join(lines)
+        
+        if 'container_v1.ClusterManagerClient()' in result or 'gke_client' in result:
+            if 'from google.cloud import container_v1' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import container_v1')
+                result = '\n'.join(lines)
+        
+        if 'run_v2.ServicesClient()' in result or 'cloud_run_client' in result:
+            if 'from google.cloud import run_v2' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import run_v2')
+                result = '\n'.join(lines)
+        
+        if 'functions_v1.CloudFunctionsServiceClient()' in result or 'functions_client' in result:
+            if 'from google.cloud import functions_v1' not in result:
+                lines = result.split('\n')
+                import_idx = 0
+                for i, line in enumerate(lines):
+                    if line.strip().startswith('import') or line.strip().startswith('from'):
+                        import_idx = i + 1
+                    elif line.strip() and not line.strip().startswith('#'):
+                        break
+                lines.insert(import_idx, 'from google.cloud import functions_v1')
+                result = '\n'.join(lines)
         
         return result
     
