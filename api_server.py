@@ -141,6 +141,14 @@ def get_supported_services():
 @app.post("/api/migrate", response_model=MigrateResponse)
 async def migrate_code(request: MigrateRequest, background_tasks: BackgroundTasks):
     """Initiate a code migration process"""
+    # Check if GEMINI_API_KEY is set (required for LLM transformations)
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_key:
+        raise HTTPException(
+            status_code=500,
+            detail="GEMINI_API_KEY is not configured. Please set it in Cloud Run environment variables."
+        )
+    
     migration_id = f"mig_{uuid4().hex[:8]}"
     
     # Validate input
