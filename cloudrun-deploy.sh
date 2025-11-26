@@ -60,9 +60,10 @@ else
 fi
 
 # Check for GEMINI_API_KEY - try to get from existing service first, then from environment
-EXISTING_GEMINI_KEY=$(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format="value(spec.template.spec.containers[0].env[?(@.name=='GEMINI_API_KEY')].value)" 2>/dev/null || echo "")
+# Try multiple formats to get the existing key
+EXISTING_GEMINI_KEY=$(gcloud run services describe ${SERVICE_NAME} --region ${REGION} --format="yaml(spec.template.spec.containers[0].env)" 2>/dev/null | grep -A 1 "GEMINI_API_KEY" | grep "value:" | sed 's/.*value: //' | tr -d "'\"" || echo "")
 
-if [ -n "${EXISTING_GEMINI_KEY}" ]; then
+if [ -n "${EXISTING_GEMINI_KEY}" ] && [ "${EXISTING_GEMINI_KEY}" != "null" ]; then
     echo -e "${GREEN}Found existing GEMINI_API_KEY in service, preserving it${NC}"
     GEMINI_API_KEY="${EXISTING_GEMINI_KEY}"
 elif [ -z "${GEMINI_API_KEY}" ]; then
