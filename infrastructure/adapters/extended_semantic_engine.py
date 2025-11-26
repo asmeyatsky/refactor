@@ -4983,7 +4983,7 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         return code
     
     def _aggressive_csharp_aws_cleanup(self, code: str) -> str:
-        """Aggressive cleanup of AWS patterns in C# AWS cleanup - handles ALL AWS services"""
+        """Aggressive cleanup of AWS patterns in C# code - handles ALL AWS services"""
         # FIRST: Remove all AWS imports (must be done before replacing class names)
         code = re.sub(r'using\s+Amazon\.S3[^;]*;', '', code, flags=re.MULTILINE)
         code = re.sub(r'using\s+Amazon\.S3\.Model[^;]*;', '', code, flags=re.MULTILINE)
