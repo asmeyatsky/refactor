@@ -46,8 +46,9 @@ if REQUIRE_AUTH:
     @app.middleware("http")
     async def authentication_middleware_handler(request: Request, call_next):
         """Authentication middleware handler"""
-        # Allow health checks and static files without auth
-        if request.url.path.startswith("/api/health") or request.url.path.startswith("/static"):
+        # Allow health checks, static files, and public files without auth
+        public_paths = ["/api/health", "/static", "/manifest.json", "/favicon.ico"]
+        if any(request.url.path.startswith(path) for path in public_paths) or request.url.path in ["/manifest.json", "/favicon.ico"]:
             return await call_next(request)
         
         # For all routes (including root and frontend), require authentication
@@ -1132,6 +1133,23 @@ if frontend_build_path.exists():
     # Mount static files
     app.mount("/static", StaticFiles(directory=str(frontend_build_path / "static")), name="static")
     
+    # Serve public files like manifest.json, favicon.ico, etc.
+    @app.get("/manifest.json")
+    async def serve_manifest(request: Request):
+        """Serve manifest.json"""
+        manifest_path = frontend_build_path / "manifest.json"
+        if manifest_path.exists():
+            return FileResponse(str(manifest_path), media_type="application/manifest+json")
+        raise HTTPException(status_code=404, detail="manifest.json not found")
+    
+    @app.get("/favicon.ico")
+    async def serve_favicon(request: Request):
+        """Serve favicon.ico"""
+        favicon_path = frontend_build_path / "favicon.ico"
+        if favicon_path.exists():
+            return FileResponse(str(favicon_path))
+        raise HTTPException(status_code=404, detail="favicon.ico not found")
+    
     # Serve index.html for all non-API routes (must be last route)
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str, request: Request):
@@ -1142,6 +1160,10 @@ if frontend_build_path.exists():
         
         # Don't serve static files (already handled by mount)
         if full_path.startswith("static/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        
+        # Don't serve manifest.json or favicon (already handled above)
+        if full_path in ["manifest.json", "favicon.ico"]:
             raise HTTPException(status_code=404, detail="Not found")
         
         # User should be authenticated by middleware

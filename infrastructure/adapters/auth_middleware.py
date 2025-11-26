@@ -95,11 +95,35 @@ class SearceAuthMiddleware:
             user_info = await self._validate_cloud_run_iam(request)
             if user_info:
                 return user_info
-            # If validation didn't return user info but this is a web request (not API),
-            # Cloud Run already authenticated it, so allow it through
-            # (Cloud Run blocks unauthenticated requests before they reach us)
-            if not request.url.path.startswith("/api/"):
-                # For web requests, Cloud Run handles auth, so allow through
+            # If validation didn't return user info, check if this is a same-origin request
+            # (Cloud Run authenticated the initial page load, so same-origin API calls are trusted)
+            referer = request.headers.get("referer", "")
+            origin = request.headers.get("origin", "")
+            host = request.headers.get("host", "")
+            
+            # Check if request is from same origin (frontend making API call)
+            is_same_origin = False
+            if referer:
+                # Extract host from referer
+                try:
+                    from urllib.parse import urlparse
+                    referer_host = urlparse(referer).netloc
+                    if referer_host == host or referer_host.endswith(f".{host}"):
+                        is_same_origin = True
+                except:
+                    pass
+            if origin and not is_same_origin:
+                try:
+                    from urllib.parse import urlparse
+                    origin_host = urlparse(origin).netloc
+                    if origin_host == host or origin_host.endswith(f".{host}"):
+                        is_same_origin = True
+                except:
+                    pass
+            
+            # For same-origin requests (frontend -> API), trust Cloud Run authentication
+            if is_same_origin or not request.url.path.startswith("/api/"):
+                # Cloud Run already authenticated the page load, so allow API calls from same origin
                 return {"email": "authenticated@searce.com", "auth_method": "cloud_run_iam"}
         
         # Try OAuth token validation
