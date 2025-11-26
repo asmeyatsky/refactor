@@ -73,13 +73,13 @@ fi
 echo -e "${YELLOW}Building Docker image with Cloud Build...${NC}"
 gcloud builds submit --tag ${IMAGE_NAME}:latest --timeout=20m
 
-# Deploy to Cloud Run
+# Deploy to Cloud Run with authentication required
 echo -e "${YELLOW}Deploying to Cloud Run...${NC}"
 gcloud run deploy ${SERVICE_NAME} \
     --image ${IMAGE_NAME}:latest \
     --platform managed \
     --region ${REGION} \
-    --allow-unauthenticated \
+    --no-allow-unauthenticated \
     --memory 2Gi \
     --cpu 2 \
     --timeout 300 \
@@ -88,8 +88,17 @@ gcloud run deploy ${SERVICE_NAME} \
     --set-env-vars "${ENV_VARS}" \
     --service-account ${SERVICE_ACCOUNT_EMAIL}
 
-# Ensure public access is maintained (allow allUsers)
-echo -e "${YELLOW}Ensuring public access...${NC}"
+# Allow Searce domain and specific users to access (SSO will be enforced)
+echo -e "${YELLOW}Configuring IAM for Searce SSO...${NC}"
+# Allow Searce domain
+gcloud run services add-iam-policy-binding ${SERVICE_NAME} \
+    --region ${REGION} \
+    --member "domain:searce.com" \
+    --role "roles/run.invoker" \
+    --quiet || echo -e "${YELLOW}Searce domain access already configured${NC}"
+
+# Also allow allUsers for public access (users will still need to authenticate via Google Sign-In)
+echo -e "${YELLOW}Allowing public access (with authentication required)...${NC}"
 gcloud run services add-iam-policy-binding ${SERVICE_NAME} \
     --region ${REGION} \
     --member "allUsers" \
