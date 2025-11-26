@@ -333,14 +333,23 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         # Start with smooth progress injection
         smooth_progress_update(0.0, 5.0, "Initializing refactoring...", steps=3, is_refactoring=True)
         
-        # Map language string to enum
+        # Map language string to enum (normalize aliases first)
+        language_normalized = request.language.lower()
+        # Normalize aliases to canonical names
+        if language_normalized in ['js', 'nodejs', 'node']:
+            language_normalized = 'javascript'
+        elif language_normalized == 'golang':
+            language_normalized = 'go'
+        
         language_map = {
             'python': ProgrammingLanguage.PYTHON,
             'java': ProgrammingLanguage.JAVA,
             'csharp': ProgrammingLanguage.CSHARP,
-            'c#': ProgrammingLanguage.CSHARP
+            'c#': ProgrammingLanguage.CSHARP,
+            'javascript': ProgrammingLanguage.JAVASCRIPT,
+            'go': ProgrammingLanguage.GO
         }
-        language = language_map.get(request.language)
+        language = language_map.get(language_normalized)
         
         if not language:
             raise ValueError(f"Unsupported language: {request.language}")
@@ -355,8 +364,15 @@ def execute_migration(migration_id: str, request: MigrateRequest, temp_file_path
         # Copy the uploaded file to the codebase directory
         import shutil
         # Map language to file extension
-        lang_ext_map = {'python': 'py', 'java': 'java', 'csharp': 'cs', 'c#': 'cs'}
-        file_ext = lang_ext_map.get(request.language, 'py')
+        lang_ext_map = {
+            'python': 'py', 
+            'java': 'java', 
+            'csharp': 'cs', 
+            'c#': 'cs',
+            'javascript': 'js',
+            'go': 'go'
+        }
+        file_ext = lang_ext_map.get(language_normalized, 'py')
         target_file = codebase_path / f"code.{file_ext}"
         shutil.copy2(temp_file_path, target_file)
         

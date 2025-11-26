@@ -538,8 +538,15 @@ def _transform_code_standalone(
     if language == 'python' and hasattr(ast_engine, '_aggressive_aws_cleanup'):
         content = ast_engine._aggressive_aws_cleanup(content)
     
+    # Normalize language aliases for transformation engine
+    language_normalized = language.lower()
+    if language_normalized in ['js', 'nodejs', 'node']:
+        language_normalized = 'javascript'
+    elif language_normalized == 'golang':
+        language_normalized = 'go'
+    
     # Transform the code (AST engine will use regex patterns, guided by LLM recipe if available)
-    transformed_content, variable_mapping = ast_engine.transform_code(content, language, recipe)
+    transformed_content, variable_mapping = ast_engine.transform_code(content, language_normalized, recipe)
     
     # CRITICAL: Run aggressive AWS cleanup AGAIN after transformation
     if language == 'python' and hasattr(ast_engine, '_aggressive_aws_cleanup'):

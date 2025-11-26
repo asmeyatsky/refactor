@@ -17,6 +17,8 @@ class ProgrammingLanguage(Enum):
     JAVA = "java"
     PYTHON = "python"
     CSHARP = "csharp"
+    JAVASCRIPT = "javascript"
+    GO = "go"
 
 
 @dataclass(frozen=True)
