@@ -4875,20 +4875,31 @@ class ExtendedJavaTransformer(BaseExtendedTransformer):
         code = re.sub(r'\bS3ClientBuilder\b', 'StorageOptions', code)
         code = re.sub(r'\bPutObjectRequest\b', 'BlobInfo', code)
         code = re.sub(r'\bGetObjectRequest\b', 'BlobId', code)
+        # AWS SDK v2 specific patterns
+        code = re.sub(r'\bRegion\.US_EAST_1\b', 'StorageOptions.getDefaultInstance().getService()', code)
+        code = re.sub(r'\bRegion\.\w+\b', '', code)  # Remove any Region enum usage
+        code = re.sub(r'\.region\([^)]*\)', '', code, flags=re.IGNORECASE)  # Remove .region() calls
+        code = re.sub(r'\bRequestBody\b', 'ByteArrayInputStream', code)  # AWS SDK v2 RequestBody -> Java InputStream
+        code = re.sub(r'RequestBody\.fromBytes\(', 'new ByteArrayInputStream(', code)
         code = re.sub(r'com\.amazonaws\.services\.s3', 'com.google.cloud.storage', code)
         code = re.sub(r'software\.amazon\.awssdk\.services\.s3', 'com.google.cloud.storage', code)
         
         # ===== LAMBDA PATTERNS =====
         code = re.sub(r'\bRequestHandler\b', 'HttpFunction', code)
         code = re.sub(r'\bILambdaContext\b', 'HttpRequest', code)
-        # Only replace Context when it's clearly AWS Lambda Context (in method signatures with RequestHandler)
+        # Replace Context when it's clearly AWS Lambda Context
         # Pattern: RequestHandler<..., Context> or handleRequest(..., Context context)
         code = re.sub(r'RequestHandler<[^>]*,\s*Context\s*>', 'HttpFunction<HttpRequest, HttpResponse>', code)
-        code = re.sub(r'handleRequest\([^,)]+,\s*Context\s+(\w+)\)', r'handleRequest(HttpRequest \1)', code)
+        code = re.sub(r'implements\s+RequestHandler<[^>]*,\s*Context\s*>', 'implements HttpFunction<HttpRequest, HttpResponse>', code)
+        # Replace Context parameter in handleRequest methods - most specific pattern first
+        code = re.sub(r'handleRequest\(([^,)]+),\s*Context\s+(\w+)\)', r'handleRequest(\1, HttpRequest \2)', code)
+        # Replace Context when it appears as a parameter type (after imports are removed, remaining Context is likely Lambda Context)
+        # Only replace if it's followed by a variable name (parameter declaration)
+        code = re.sub(r'\([^)]*\bContext\s+(\w+)\s*\)', r'(HttpRequest \1)', code)  # (..., Context context) -> (..., HttpRequest context)
+        code = re.sub(r',\s*Context\s+(\w+)', r', HttpRequest \1', code)  # , Context context -> , HttpRequest context
         code = re.sub(r'com\.amazonaws\.services\.lambda', 'com.google.cloud.functions', code)
         code = re.sub(r'software\.amazon\.awssdk\.services\.lambda', 'com.google.cloud.functions', code)
-        # Handle context.getLogger() -> HttpRequest logging (only when context is a parameter)
-        code = re.sub(r'(\w+)\s*\.getLogger\(\)', r'\1.getLogger()', code)  # Keep as-is, will be handled by Gemini
+        # Handle context.getLogger() -> HttpRequest logging (keep as-is, Gemini will handle the transformation)
         
         # ===== DYNAMODB PATTERNS =====
         code = re.sub(r'\bAmazonDynamoDB\b', 'Firestore', code)
