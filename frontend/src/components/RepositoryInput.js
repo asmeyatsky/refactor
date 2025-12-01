@@ -38,6 +38,7 @@ const RepositoryInput = ({
   loading,
   selectedServices,
   onServicesChange,
+  cloudProvider = 'aws',
   onClearAnalysis
 }) => {
   const [urlError, setUrlError] = useState('');

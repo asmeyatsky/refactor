@@ -14,13 +14,13 @@ const apiClient = axios.create({
 });
 
 // Function to initiate a code snippet migration
-export const migrateCodeSnippet = async ({ code, language, services }) => {
+export const migrateCodeSnippet = async ({ code, language, services, cloudProvider = 'aws' }) => {
   try {
     const response = await apiClient.post('/api/migrate', {
       code,
       language,
       services,
-      cloud_provider: 'aws', // Always AWS
+      cloud_provider: cloudProvider, // 'aws' or 'azure'
     });
     return response.data;
   } catch (error) {

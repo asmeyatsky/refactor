@@ -33,6 +33,7 @@ import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 
 import InputMethodSelection from './components/InputMethodSelection';
+import CloudProviderSelection from './components/CloudProviderSelection';
 import CodeSnippetInput from './components/CodeSnippetInput';
 import RepositoryInput from './components/RepositoryInput';
 import MigrationResults from './components/MigrationResults';
@@ -64,10 +65,11 @@ const theme = createTheme({
   },
 });
 
-const steps = ['Choose Input Method', 'Provide Code/Repository', 'Review & Refactor'];
+const steps = ['Select Cloud Provider', 'Choose Input Method', 'Provide Code/Repository', 'Review & Refactor'];
 
 const App = () => {
   const [activeStep, setActiveStep] = useState(0);
+  const [cloudProvider, setCloudProvider] = useState(null); // 'aws' or 'azure'
   const [inputMethod, setInputMethod] = useState(null); // 'code' or 'repository'
   const [codeSnippet, setCodeSnippet] = useState('');
   const [repositoryUrl, setRepositoryUrl] = useState('');
@@ -103,11 +105,15 @@ const App = () => {
   }, []);
 
   const handleNext = () => {
-    if (activeStep === 0 && !inputMethod) {
+    if (activeStep === 0 && !cloudProvider) {
+      setError('Please select a cloud provider');
+      return;
+    }
+    if (activeStep === 1 && !inputMethod) {
       setError('Please select an input method');
       return;
     }
-    if (activeStep === 1) {
+    if (activeStep === 2) {
       if (inputMethod === 'code' && !codeSnippet.trim()) {
         setError('Please provide code to refactor');
         return;
@@ -138,6 +144,7 @@ const App = () => {
     }
     
     setActiveStep(0);
+    setCloudProvider(null);
     setInputMethod(null);
     setCodeSnippet('');
     setRepositoryUrl('');
@@ -201,7 +208,8 @@ const App = () => {
         const initialResponse = await migrateCodeSnippet({
           code: codeSnippet,
           language,
-          services: selectedServices
+          services: selectedServices,
+          cloudProvider: cloudProvider
         });
         
         // Poll for completion
@@ -236,7 +244,7 @@ const App = () => {
                   ...statusResponse.result
                 };
                 setMigrationResult(finalResult);
-                setActiveStep(2); // Step 2 is now "Review & Refactor" (last step)
+                setActiveStep(3); // Step 3 is now "Review & Refactor" (last step)
                 setMigrating(false);
               } else if (statusResponse.status === 'failed') {
                 // Cleanup
@@ -269,9 +277,9 @@ const App = () => {
           }, 300000); // 5 minutes
         } else {
           // Fallback if no migration_id
-          setMigrationResult(initialResponse);
-          setActiveStep(2); // Step 2 is now "Review & Refactor" (last step)
-          setMigrating(false);
+                setMigrationResult(initialResponse);
+                setActiveStep(3); // Step 3 is now "Review & Refactor" (last step)
+                setMigrating(false);
         }
       } else {
         // Repository migration - now uses async polling like code snippet migration
@@ -330,7 +338,7 @@ const App = () => {
                 console.log('App.js - refactored_files:', finalResult?.refactored_files);
                 console.log('App.js - files_changed:', finalResult?.files_changed);
                 setMigrationResult(finalResult);
-                setActiveStep(2); // Step 2 is now "Review & Refactor" (last step)
+                setActiveStep(3); // Step 3 is now "Review & Refactor" (last step)
                 setMigrating(false);
               } else if (statusResponse.status === 'failed') {
                 // Cleanup
@@ -388,12 +396,19 @@ const App = () => {
     switch (activeStep) {
       case 0:
         return (
+          <CloudProviderSelection
+            selectedProvider={cloudProvider}
+            onSelect={setCloudProvider}
+          />
+        );
+      case 1:
+        return (
           <InputMethodSelection
             selectedMethod={inputMethod}
             onSelect={setInputMethod}
           />
         );
-      case 1:
+      case 2:
         if (inputMethod === 'code') {
           return (
             <CodeSnippetInput
@@ -403,6 +418,7 @@ const App = () => {
               onLanguageChange={setLanguage}
               selectedServices={selectedServices}
               onServicesChange={setSelectedServices}
+              cloudProvider={cloudProvider}
             />
           );
         } else {
@@ -417,6 +433,7 @@ const App = () => {
                 loading={analyzing}
                 selectedServices={selectedServices}
                 onServicesChange={setSelectedServices}
+                cloudProvider={cloudProvider}
                 onClearAnalysis={() => {
                   setAnalysisResult(null);
                   setSelectedServices([]);
@@ -425,7 +442,7 @@ const App = () => {
               />
             );
         }
-      case 2:
+      case 3:
         return (
           <MigrationResults
             result={migrationResult}
@@ -459,7 +476,7 @@ const App = () => {
                   Cloud Migration Assistant
                 </Typography>
                 <Typography variant="body1" sx={{ opacity: 0.9 }}>
-                  Transform your AWS infrastructure to Google Cloud Platform
+                  Transform your AWS or Azure infrastructure to Google Cloud Platform
                 </Typography>
               </Box>
 
@@ -505,7 +522,7 @@ const App = () => {
                   {renderStepContent()}
                   
                   {/* Show progress bars when migrating or on results page with progress */}
-                  {(migrating || (activeStep === 2 && (progress.refactoring.progress > 0 || progress.validation.progress > 0))) && (
+                  {(migrating || (activeStep === 3 && (progress.refactoring.progress > 0 || progress.validation.progress > 0))) && (
                     <Box sx={{ mt: 3 }}>
                       <Paper elevation={2} sx={{ p: 3, bgcolor: 'background.paper', borderRadius: 2 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', mb: 2 }}>
@@ -585,7 +602,7 @@ const App = () => {
                       >
                         New Refactoring
                       </Button>
-                    ) : activeStep === 1 ? (
+                    ) : activeStep === 2 ? (
                       <Button
                         variant="contained"
                         onClick={handleMigrate}
@@ -601,7 +618,7 @@ const App = () => {
                         variant="contained"
                         onClick={handleNext}
                         disabled={
-                          (activeStep === 0 && !inputMethod) ||
+                          (activeStep === 0 && !cloudProvider) ||
                           (activeStep === 1 && !inputMethod)
                         }
                         sx={{ minWidth: 120 }}
