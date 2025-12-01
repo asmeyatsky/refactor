@@ -357,6 +357,71 @@ class AzureServiceMapper:
                 'app_service_plan': 'cloud_run_service',
                 'site_name': 'service_name'
             }
+        ),
+        
+        AzureService.KEY_VAULT: AzureToGCPServiceMapping(
+            azure_service=AzureService.KEY_VAULT,
+            gcp_service=GCPService.SECRET_MANAGER,
+            azure_sdk_imports=['azure.keyvault.secrets', 'azure.identity'],
+            gcp_sdk_imports=['google.cloud.secretmanager'],
+            azure_api_patterns=[
+                r'SecretClient',
+                r'KeyVaultClient',
+                r'get_secret',
+                r'set_secret',
+                r'delete_secret',
+                r'list_secrets'
+            ],
+            gcp_api_patterns=[
+                r'secretmanager\.SecretManagerServiceClient\(',
+                r'access_secret_version',
+                r'create_secret',
+                r'delete_secret',
+                r'list_secrets'
+            ],
+            auth_translation={
+                'AZURE_KEY_VAULT_URL': 'GOOGLE_CLOUD_PROJECT',
+                'AZURE_CLIENT_ID': 'GOOGLE_APPLICATION_CREDENTIALS',
+                'AZURE_CLIENT_SECRET': 'GOOGLE_APPLICATION_CREDENTIALS',
+                'AZURE_TENANT_ID': 'GOOGLE_CLOUD_PROJECT'
+            },
+            config_translation={
+                'vault_url': 'project_id',
+                'secret_name': 'secret_id',
+                'secret_version': 'version_id'
+            }
+        ),
+        
+        AzureService.APPLICATION_INSIGHTS: AzureToGCPServiceMapping(
+            azure_service=AzureService.APPLICATION_INSIGHTS,
+            gcp_service=GCPService.CLOUD_MONITORING,
+            azure_sdk_imports=['azure.applicationinsights', 'applicationinsights'],
+            gcp_sdk_imports=['google.cloud.monitoring_v3', 'google.cloud.logging'],
+            azure_api_patterns=[
+                r'ApplicationInsightsClient',
+                r'TelemetryClient',
+                r'track_event',
+                r'track_exception',
+                r'track_metric',
+                r'track_trace',
+                r'flush'
+            ],
+            gcp_api_patterns=[
+                r'monitoring_v3\.MetricServiceClient\(',
+                r'logging\.Client\(',
+                r'create_time_series',
+                r'log_text',
+                r'log_struct'
+            ],
+            auth_translation={
+                'APPINSIGHTS_INSTRUMENTATION_KEY': 'GOOGLE_CLOUD_PROJECT',
+                'APPINSIGHTS_CONNECTION_STRING': 'GOOGLE_CLOUD_PROJECT'
+            },
+            config_translation={
+                'instrumentation_key': 'project_id',
+                'connection_string': 'project_id',
+                'app_id': 'project_id'
+            }
         )
     }
     

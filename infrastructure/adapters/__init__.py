@@ -23,6 +23,7 @@ from domain.entities.refactoring_plan import RefactoringTask
 from domain.ports import CodeAnalyzerPort, LLMProviderPort, ASTTransformationPort, TestRunnerPort
 from infrastructure.adapters.toon_serializer import ToonSerializer, to_toon, from_toon
 from infrastructure.adapters.toon_integration import ToonGeminiIntegration
+from infrastructure.adapters.skills_loader import SkillsLoader, get_skills_loader
 
 # Import config
 try:

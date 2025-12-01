@@ -336,6 +336,15 @@ class ExtendedASTTransformationEngine:
     def _build_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
         """Build a comprehensive prompt for Gemini to transform AWS code to GCP."""
         
+        # Load architectural skills
+        try:
+            from infrastructure.adapters.skills_loader import get_skills_loader
+            skills_loader = get_skills_loader()
+            skills_prompt = skills_loader.get_skills_prompt()
+        except Exception as e:
+            logger.warning(f"Failed to load skills: {e}, proceeding without skills")
+            skills_prompt = ""
+        
         # Detect services from code
         services_detected = []
         if re.search(r'boto3\.(client|resource)\([\'\"]s3[\'\"]', code, re.IGNORECASE) or re.search(r'\.(get_object|put_object|upload_file|download_file)', code):
@@ -353,7 +362,17 @@ class ExtendedASTTransformationEngine:
         
         retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
         
-        prompt = f"""You are an expert code refactoring assistant. Transform the following AWS Python code to Google Cloud Platform (GCP) code.
+        prompt = f"""{skills_prompt}
+
+You are an expert code refactoring assistant. Transform the following AWS Python code to Google Cloud Platform (GCP) code.
+
+**ARCHITECTURAL REQUIREMENTS:**
+When generating the refactored code, you MUST follow Clean Architecture principles:
+- Use ports and adapters pattern for external dependencies (GCP SDKs)
+- Keep business logic separate from infrastructure code
+- Use immutable data structures where possible
+- Include architectural intent documentation in code comments
+- Follow Domain-Driven Design principles for domain models
 
 **CRITICAL REQUIREMENTS:**
 1. **ZERO AWS CODE** - The output must contain NO AWS patterns, variables, or APIs
@@ -464,6 +483,15 @@ class ExtendedASTTransformationEngine:
     def _build_java_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
         """Build a comprehensive prompt for Gemini to transform AWS Java code to GCP."""
         
+        # Load architectural skills
+        try:
+            from infrastructure.adapters.skills_loader import get_skills_loader
+            skills_loader = get_skills_loader()
+            skills_prompt = skills_loader.get_skills_prompt()
+        except Exception as e:
+            logger.warning(f"Failed to load skills: {e}, proceeding without skills")
+            skills_prompt = ""
+        
         # Detect services from Java code
         services_detected = []
         if re.search(r'com\.amazonaws\.services\.s3|AmazonS3|S3Client', code, re.IGNORECASE):
@@ -481,7 +509,17 @@ class ExtendedASTTransformationEngine:
         
         retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
         
-        prompt = f"""You are an expert Java code refactoring assistant. Transform the following AWS Java code to Google Cloud Platform (GCP) Java code.
+        prompt = f"""{skills_prompt}
+
+You are an expert Java code refactoring assistant. Transform the following AWS Java code to Google Cloud Platform (GCP) Java code.
+
+**ARCHITECTURAL REQUIREMENTS:**
+When generating the refactored code, you MUST follow Clean Architecture principles:
+- Use interfaces (ports) for external dependencies (GCP SDKs)
+- Keep business logic in domain services, not in infrastructure adapters
+- Use immutable objects (final fields) where possible
+- Include architectural intent documentation in JavaDoc comments
+- Follow Domain-Driven Design principles for domain models
 
 **CRITICAL REQUIREMENTS:**
 1. **ZERO AWS CODE** - The output must contain NO AWS patterns, classes, or APIs
@@ -582,6 +620,15 @@ class ExtendedASTTransformationEngine:
     def _build_csharp_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
         """Build a comprehensive prompt for Gemini to transform AWS C# code to GCP."""
         
+        # Load architectural skills
+        try:
+            from infrastructure.adapters.skills_loader import get_skills_loader
+            skills_loader = get_skills_loader()
+            skills_prompt = skills_loader.get_skills_prompt()
+        except Exception as e:
+            logger.warning(f"Failed to load skills: {e}, proceeding without skills")
+            skills_prompt = ""
+        
         # Detect services from C# code
         services_detected = []
         if re.search(r'Amazon\.S3|AmazonS3|S3Client|AWSSDK\.S3', code, re.IGNORECASE):
@@ -599,7 +646,17 @@ class ExtendedASTTransformationEngine:
         
         retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
         
-        prompt = f"""You are an expert C# code refactoring assistant. Transform the following AWS C# code to Google Cloud Platform (GCP) C# code.
+        prompt = f"""{skills_prompt}
+
+You are an expert C# code refactoring assistant. Transform the following AWS C# code to Google Cloud Platform (GCP) C# code.
+
+**ARCHITECTURAL REQUIREMENTS:**
+When generating the refactored code, you MUST follow Clean Architecture principles:
+- Use interfaces for external dependencies (GCP SDKs)
+- Keep business logic in domain services, not in infrastructure adapters
+- Use immutable types (readonly properties) where possible
+- Include architectural intent documentation in XML comments
+- Follow Domain-Driven Design principles for domain models
 
 **CRITICAL REQUIREMENTS:**
 1. **ZERO AWS CODE** - The output must contain NO AWS patterns, classes, or APIs
@@ -717,6 +774,15 @@ class ExtendedASTTransformationEngine:
     def _build_javascript_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
         """Build a comprehensive prompt for Gemini to transform AWS JavaScript/Node.js code to GCP."""
         
+        # Load architectural skills
+        try:
+            from infrastructure.adapters.skills_loader import get_skills_loader
+            skills_loader = get_skills_loader()
+            skills_prompt = skills_loader.get_skills_prompt()
+        except Exception as e:
+            logger.warning(f"Failed to load skills: {e}, proceeding without skills")
+            skills_prompt = ""
+        
         # Detect services from JavaScript code
         services_detected = []
         if re.search(r'aws-sdk|AWS\.S3|S3Client|@aws-sdk/client-s3', code, re.IGNORECASE):
@@ -734,7 +800,17 @@ class ExtendedASTTransformationEngine:
         
         retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
         
-        prompt = f"""You are an expert JavaScript/Node.js code refactoring assistant. Transform the following AWS JavaScript/Node.js code to Google Cloud Platform (GCP) JavaScript/Node.js code.
+        prompt = f"""{skills_prompt}
+
+You are an expert JavaScript/Node.js code refactoring assistant. Transform the following AWS JavaScript/Node.js code to Google Cloud Platform (GCP) JavaScript/Node.js code.
+
+**ARCHITECTURAL REQUIREMENTS:**
+When generating the refactored code, you MUST follow Clean Architecture principles:
+- Use abstraction layers (interfaces/types) for external dependencies (GCP SDKs)
+- Keep business logic in domain services, not in infrastructure adapters
+- Use immutable data structures (const, Object.freeze) where possible
+- Include architectural intent documentation in JSDoc comments
+- Follow Domain-Driven Design principles for domain models
 
 **CRITICAL REQUIREMENTS:**
 1. **ZERO AWS CODE** - The output must contain NO AWS patterns, classes, or APIs
@@ -828,6 +904,15 @@ class ExtendedASTTransformationEngine:
     def _build_go_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
         """Build a comprehensive prompt for Gemini to transform AWS Go code to GCP."""
         
+        # Load architectural skills
+        try:
+            from infrastructure.adapters.skills_loader import get_skills_loader
+            skills_loader = get_skills_loader()
+            skills_prompt = skills_loader.get_skills_prompt()
+        except Exception as e:
+            logger.warning(f"Failed to load skills: {e}, proceeding without skills")
+            skills_prompt = ""
+        
         # Detect services from Go code
         services_detected = []
         if re.search(r'github\.com/aws/aws-sdk-go.*s3|s3\.New|s3iface', code, re.IGNORECASE):
@@ -845,7 +930,17 @@ class ExtendedASTTransformationEngine:
         
         retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained AWS patterns. Be EXTREMELY thorough this time.**" if retry else ""
         
-        prompt = f"""You are an expert Go code refactoring assistant. Transform the following AWS Go code to Google Cloud Platform (GCP) Go code.
+        prompt = f"""{skills_prompt}
+
+You are an expert Go code refactoring assistant. Transform the following AWS Go code to Google Cloud Platform (GCP) Go code.
+
+**ARCHITECTURAL REQUIREMENTS:**
+When generating the refactored code, you MUST follow Clean Architecture principles:
+- Use interfaces for external dependencies (GCP SDKs)
+- Keep business logic in domain services, not in infrastructure adapters
+- Use immutable structs (no exported setters) where possible
+- Include architectural intent documentation in Go doc comments
+- Follow Domain-Driven Design principles for domain models
 
 **CRITICAL REQUIREMENTS:**
 1. **ZERO AWS CODE** - The output must contain NO AWS patterns, packages, or APIs
@@ -1069,6 +1164,26 @@ class ExtendedASTTransformationEngine:
                 r'\bILambdaContext\b',
                 r'\bAPIGatewayProxyRequest\b',
                 r'\bAPIGatewayProxyResponse\b',
+            ]
+        elif language in ['go', 'golang']:
+            aws_patterns = [
+                r'github\.com/aws/aws-sdk-go',
+                r'github\.com/aws/aws-sdk-go-v2',
+                r's3\.New\(',
+                r'dynamodb\.New\(',
+                r'lambda\.New\(',
+                r'sqs\.New\(',
+                r'sns\.New\(',
+                r's3iface\.',
+                r'dynamodbiface\.',
+                r'\.S3\(',
+                r'\.DynamoDB\(',
+                r'\.Lambda\(',
+                r'\.SQS\(',
+                r'\.SNS\(',
+                r'AWS_ACCESS_KEY_ID',
+                r'AWS_SECRET_ACCESS_KEY',
+                r'AWS_DEFAULT_REGION',
             ]
         elif language in ['javascript', 'js', 'nodejs', 'node']:
             aws_patterns = [
@@ -5778,6 +5893,57 @@ class ExtendedGoTransformer(BaseExtendedTransformer):
         code = re.sub(
             r'github\.com/aws/aws-sdk-go/service/dynamodb',
             'cloud.google.com/go/firestore',
+            code
+        )
+        code = re.sub(
+            r'dynamodb\.New\(',
+            'firestore.NewClient(ctx, projectID)',
+            code
+        )
+        return code
+    
+    def _migrate_sqs_to_pubsub(self, code: str) -> str:
+        """Migrate AWS SQS Go code to Google Pub/Sub (fallback regex)"""
+        code = re.sub(
+            r'github\.com/aws/aws-sdk-go/service/sqs',
+            'cloud.google.com/go/pubsub',
+            code
+        )
+        code = re.sub(
+            r'sqs\.New\(',
+            'pubsub.NewClient(ctx, projectID)',
+            code
+        )
+        return code
+    
+    def _migrate_sns_to_pubsub(self, code: str) -> str:
+        """Migrate AWS SNS Go code to Google Pub/Sub (fallback regex)"""
+        code = re.sub(
+            r'github\.com/aws/aws-sdk-go/service/sns',
+            'cloud.google.com/go/pubsub',
+            code
+        )
+        code = re.sub(
+            r'sns\.New\(',
+            'pubsub.NewClient(ctx, projectID)',
+            code
+        )
+        return code
+    
+    def _migrate_rds_to_cloud_sql(self, code: str) -> str:
+        """Migrate AWS RDS Go code to Google Cloud SQL (fallback regex)"""
+        code = re.sub(
+            r'github\.com/aws/aws-sdk-go/service/rds',
+            'cloud.google.com/go/cloudsqlconn',
+            code
+        )
+        return code
+    
+    def _migrate_ec2_to_compute_engine(self, code: str) -> str:
+        """Migrate AWS EC2 Go code to Google Compute Engine (fallback regex)"""
+        code = re.sub(
+            r'github\.com/aws/aws-sdk-go/service/ec2',
+            'cloud.google.com/go/compute/apiv1',
             code
         )
         return code

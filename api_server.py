@@ -128,11 +128,15 @@ class MigrateResponse(BaseModel):
 @app.get("/api/services")
 def get_supported_services():
     """Get list of supported cloud services for migration"""
+    from domain.value_objects import AzureService
+    
     aws_services = [service.value for service in AWSService]
+    azure_services = [service.value for service in AzureService]
     gcp_services = [service.value for service in GCPService]
     
     return {
         "aws_services": aws_services,
+        "azure_services": azure_services,
         "gcp_services": gcp_services
     }
 

@@ -88,7 +88,7 @@ class AWSService(Enum):
 
 
 class AzureService(Enum):
-    """Azure Services supported for migration"""
+    """Azure Services supported for migration - Top 15 Azure Services"""
     BLOB_STORAGE = "blob_storage"
     FUNCTIONS = "functions"
     COSMOS_DB = "cosmos_db"
@@ -102,6 +102,8 @@ class AzureService(Enum):
     AKS = "aks"
     CONTAINER_INSTANCES = "container_instances"
     APP_SERVICE = "app_service"
+    KEY_VAULT = "key_vault"
+    APPLICATION_INSIGHTS = "application_insights"
 
 
 class GCPService(Enum):
@@ -122,3 +124,4 @@ class GCPService(Enum):
     MEMORYSTORE = "memorystore"
     CLOUD_BUILD = "cloud_build"
     CLOUD_DEPLOY = "cloud_deploy"
+    SECRET_MANAGER = "secret_manager"

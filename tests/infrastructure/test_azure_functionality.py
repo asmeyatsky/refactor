@@ -116,6 +116,107 @@ blob_service_client = BlobServiceClient.from_connection_string(conn_str="connect
         
         self.assertTrue(aws_found, "AWS services should be detected")
         self.assertTrue(azure_found, "Azure services should be detected")
+    
+    def test_azure_key_vault_mapping_exists(self):
+        """Test that Azure Key Vault to Secret Manager mapping exists"""
+        mapper = AzureServiceMapper()
+        mapping = mapper.get_mapping(AzureService.KEY_VAULT)
+        
+        self.assertIsNotNone(mapping)
+        self.assertEqual(mapping.gcp_service, GCPService.SECRET_MANAGER)
+        self.assertEqual(mapping.azure_service, AzureService.KEY_VAULT)
+        self.assertIn("SecretClient", mapping.azure_api_patterns[0])
+        self.assertIn("secretmanager", mapping.gcp_sdk_imports[0])
+    
+    def test_azure_application_insights_mapping_exists(self):
+        """Test that Azure Application Insights to Cloud Monitoring mapping exists"""
+        mapper = AzureServiceMapper()
+        mapping = mapper.get_mapping(AzureService.APPLICATION_INSIGHTS)
+        
+        self.assertIsNotNone(mapping)
+        self.assertEqual(mapping.gcp_service, GCPService.CLOUD_MONITORING)
+        self.assertEqual(mapping.azure_service, AzureService.APPLICATION_INSIGHTS)
+        self.assertIn("TelemetryClient", mapping.azure_api_patterns[1])
+        self.assertIn("monitoring_v3", mapping.gcp_sdk_imports[0])
+    
+    def test_azure_key_vault_to_secret_manager_transformation(self):
+        """Test transforming Azure Key Vault code to Secret Manager code"""
+        original_code = """
+from azure.keyvault.secrets import SecretClient
+from azure.identity import DefaultAzureCredential
+
+vault_url = "https://myvault.vault.azure.net/"
+credential = DefaultAzureCredential()
+client = SecretClient(vault_url=vault_url, credential=credential)
+
+secret = client.get_secret("my-secret")
+print(f"Secret value: {secret.value}")
+"""
+        
+        refactored_code = self.service.apply_refactoring(
+            original_code, 
+            "python", 
+            "azure_key_vault_to_secret_manager"
+        )
+        
+        # The refactored code should contain Secret Manager patterns
+        self.assertIn("google.cloud.secretmanager", refactored_code)
+        self.assertIn("SecretManagerServiceClient", refactored_code)
+        self.assertNotIn("SecretClient", refactored_code)
+        self.assertNotIn("azure.keyvault", refactored_code)
+    
+    def test_azure_application_insights_to_monitoring_transformation(self):
+        """Test transforming Azure Application Insights code to Cloud Monitoring code"""
+        original_code = """
+from applicationinsights import TelemetryClient
+
+telemetry_client = TelemetryClient(instrumentation_key="key")
+telemetry_client.track_event("UserAction", {"user_id": "123"})
+telemetry_client.track_metric("ResponseTime", 150.5)
+telemetry_client.track_trace("Processing started")
+telemetry_client.flush()
+"""
+        
+        refactored_code = self.service.apply_refactoring(
+            original_code, 
+            "python", 
+            "azure_application_insights_to_monitoring"
+        )
+        
+        # The refactored code should contain Cloud Monitoring/Logging patterns
+        self.assertIn("google.cloud", refactored_code)
+        self.assertIn("monitoring_v3", refactored_code.lower() or "logging" in refactored_code.lower())
+        self.assertNotIn("TelemetryClient", refactored_code)
+        self.assertNotIn("applicationinsights", refactored_code)
+    
+    def test_all_15_azure_services_mapped(self):
+        """Test that all 15 Azure services have mappings"""
+        mapper = AzureServiceMapper()
+        services = mapper.get_azure_services()
+        
+        expected_services = [
+            AzureService.BLOB_STORAGE,
+            AzureService.FUNCTIONS,
+            AzureService.COSMOS_DB,
+            AzureService.SERVICE_BUS,
+            AzureService.EVENT_HUBS,
+            AzureService.SQL_DATABASE,
+            AzureService.VIRTUAL_MACHINES,
+            AzureService.MONITOR,
+            AzureService.API_MANAGEMENT,
+            AzureService.REDIS_CACHE,
+            AzureService.AKS,
+            AzureService.CONTAINER_INSTANCES,
+            AzureService.APP_SERVICE,
+            AzureService.KEY_VAULT,
+            AzureService.APPLICATION_INSIGHTS
+        ]
+        
+        self.assertEqual(len(services), 15, f"Expected 15 services, got {len(services)}")
+        for service in expected_services:
+            self.assertIn(service, services, f"{service} should be in the list")
+            mapping = mapper.get_mapping(service)
+            self.assertIsNotNone(mapping, f"Mapping for {service} should exist")
 
 
 if __name__ == '__main__':

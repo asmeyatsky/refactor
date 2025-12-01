@@ -27,7 +27,9 @@ class AzureExtendedASTTransformationEngine:
         self.azure_service_mapper = AzureServiceMapper()
         self.transformers = {
             'python': AzureExtendedPythonTransformer(self.aws_service_mapper, self.azure_service_mapper),
-            'java': AzureExtendedJavaTransformer(self.aws_service_mapper, self.azure_service_mapper)  # Simplified implementation
+            'java': AzureExtendedJavaTransformer(self.aws_service_mapper, self.azure_service_mapper),  # Simplified implementation
+            'go': AzureExtendedGoTransformer(self.aws_service_mapper, self.azure_service_mapper),  # Uses Gemini API
+            'golang': AzureExtendedGoTransformer(self.aws_service_mapper, self.azure_service_mapper)  # Alias
         }
     
     def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> str:
@@ -38,16 +40,411 @@ class AzureExtendedASTTransformationEngine:
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
         
-        transformer = self.transformers[language]
-        transformed_code = transformer.transform(code, transformation_recipe)
-        
-        # Validate syntax and AWS/Azure references for Python code
-        if language == 'python':
-            # Apply aggressive Azure cleanup to remove any remaining Azure patterns
-            transformed_code = self._aggressive_azure_cleanup(transformed_code)
-            transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
+        # Use Gemini API for Go transformations (similar to AWS)
+        if language in ['go', 'golang']:
+            transformed_code = self._transform_azure_with_gemini_primary(code, transformation_recipe, language='go')
+            
+            # Apply aggressive cleanup after Gemini transformation for Go
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info("Applying aggressive Go Azure cleanup")
+            # Apply cleanup multiple times to catch all patterns
+            for i in range(3):
+                transformed_code = self._aggressive_go_azure_cleanup(transformed_code)
+            
+            # Validate output - reject if still has Azure patterns
+            max_retries = 2
+            retry_count = 0
+            while self._has_azure_patterns(transformed_code, language='go') and retry_count < max_retries:
+                retry_count += 1
+                logger.warning(f"Go output still contains Azure patterns, retrying (attempt {retry_count}/{max_retries})")
+                transformed_code = self._transform_azure_with_gemini_primary(code, transformation_recipe, retry=True, language='go')
+                # Apply cleanup multiple times after retry
+                for i in range(3):
+                    transformed_code = self._aggressive_go_azure_cleanup(transformed_code)
+            
+            # Final cleanup pass
+            if self._has_azure_patterns(transformed_code, language='go'):
+                logger.warning("Still has Azure patterns after retries, applying final aggressive cleanup")
+                for i in range(5):
+                    transformed_code = self._aggressive_go_azure_cleanup(transformed_code)
+                    if not self._has_azure_patterns(transformed_code, language='go'):
+                        break
+        else:
+            transformer = self.transformers[language]
+            transformed_code = transformer.transform(code, transformation_recipe)
+            
+            # Validate syntax and AWS/Azure references for Python code
+            if language == 'python':
+                # Apply aggressive Azure cleanup to remove any remaining Azure patterns
+                transformed_code = self._aggressive_azure_cleanup(transformed_code)
+                transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
         
         return transformed_code
+    
+    def _transform_azure_with_gemini_primary(self, code: str, recipe: Dict[str, Any], retry: bool = False, language: str = 'python') -> str:
+        """Use Gemini as the PRIMARY transformation engine for Azure to GCP migrations"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            import google.generativeai as genai
+            from config import Config
+            
+            if not Config.GEMINI_API_KEY:
+                logger.warning("GEMINI_API_KEY not set, falling back to regex")
+                return code
+            
+            genai.configure(api_key=Config.GEMINI_API_KEY)
+            # Try gemini-2.5-flash (fastest), then gemini-2.5-pro (better quality)
+            try:
+                model = genai.GenerativeModel('models/gemini-2.5-flash')
+            except Exception:
+                try:
+                    model = genai.GenerativeModel('models/gemini-2.5-pro')
+                except Exception:
+                    try:
+                        model = genai.GenerativeModel('models/gemini-pro')
+                    except Exception:
+                        model = genai.GenerativeModel('models/gemini-1.5-flash')
+            
+            service_type = recipe.get('service_type', '')
+            target_api = recipe.get('target_api', 'GCP')
+            
+            # Build comprehensive prompt for Azure to GCP transformation
+            if language == 'go':
+                prompt = self._build_azure_go_transformation_prompt(code, service_type, target_api, retry)
+            else:
+                prompt = self._build_azure_transformation_prompt(code, service_type, target_api, retry)
+            
+            # Add timeout and generation config
+            import google.generativeai.types as genai_types
+            generation_config = genai_types.GenerationConfig(
+                max_output_tokens=8192,
+                temperature=0.1,
+            )
+            
+            # Use threading timeout to prevent hanging
+            import signal
+            import threading
+            
+            response_result = [None]
+            exception_result = [None]
+            
+            def generate_with_timeout():
+                try:
+                    response_result[0] = model.generate_content(
+                        prompt,
+                        generation_config=generation_config,
+                        request_options={"timeout": 60}
+                    )
+                except Exception as e:
+                    exception_result[0] = e
+            
+            thread = threading.Thread(target=generate_with_timeout)
+            thread.daemon = True
+            thread.start()
+            thread.join(timeout=90)
+            
+            if thread.is_alive():
+                logger.warning("Gemini API call timed out after 90 seconds")
+                raise TimeoutError("Gemini API call timed out")
+            
+            if exception_result[0]:
+                raise exception_result[0]
+            
+            if not response_result[0]:
+                raise Exception("No response from Gemini API")
+            
+            response = response_result[0]
+            transformed_code = response.text.strip()
+            
+            # Extract code from markdown
+            transformed_code = self._extract_code_from_response(transformed_code, language=language)
+            
+            logger.info("Gemini Azure transformation completed")
+            return transformed_code
+            
+        except Exception as e:
+            logger.warning(f"Gemini Azure transformation failed: {e}, falling back to regex")
+            return code
+    
+    def _build_azure_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
+        """Build prompt for Azure to GCP transformation (default Python)"""
+        # Load architectural skills
+        try:
+            from infrastructure.adapters.skills_loader import get_skills_loader
+            skills_loader = get_skills_loader()
+            skills_prompt = skills_loader.get_skills_prompt()
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to load skills: {e}, proceeding without skills")
+            skills_prompt = ""
+        
+        retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained Azure patterns. Be EXTREMELY thorough this time.**" if retry else ""
+        
+        prompt = f"""{skills_prompt}
+
+You are an expert code refactoring assistant. Transform the following Azure Python code to Google Cloud Platform (GCP) code.
+
+**ARCHITECTURAL REQUIREMENTS:**
+When generating the refactored code, you MUST follow Clean Architecture principles:
+- Use ports and adapters pattern for external dependencies (GCP SDKs)
+- Keep business logic separate from infrastructure code
+- Use immutable data structures where possible
+- Include architectural intent documentation in code comments
+- Follow Domain-Driven Design principles for domain models
+
+**CRITICAL REQUIREMENTS:**
+1. **ZERO AZURE CODE** - The output must contain NO Azure patterns, variables, or APIs
+2. **Complete transformation** - Every Azure service call must be replaced with its GCP equivalent
+3. **Correct syntax** - Output must be valid, executable Python code
+4. **Proper imports** - Include all necessary GCP SDK imports
+
+{retry_note}
+
+**INPUT CODE:**
+```python
+{code}
+```
+
+**OUTPUT REQUIREMENTS:**
+- Return ONLY the transformed Python code
+- NO explanations, NO markdown formatting, NO code blocks
+- Just pure, executable Python code
+- Ensure ALL Azure patterns are removed
+- Ensure ALL GCP APIs are used correctly
+
+**TRANSFORMED GCP CODE:**"""
+        
+        return prompt
+    
+    def _build_azure_go_transformation_prompt(self, code: str, service_type: str, target_api: str, retry: bool = False) -> str:
+        """Build a comprehensive prompt for Gemini to transform Azure Go code to GCP"""
+        # Load architectural skills
+        try:
+            from infrastructure.adapters.skills_loader import get_skills_loader
+            skills_loader = get_skills_loader()
+            skills_prompt = skills_loader.get_skills_prompt()
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to load skills: {e}, proceeding without skills")
+            skills_prompt = ""
+        
+        # Detect Azure services from Go code
+        services_detected = []
+        if re.search(r'github\.com/Azure/azure-sdk-for-go.*storage|azblob|BlobServiceClient', code, re.IGNORECASE):
+            services_detected.append('Blob Storage')
+        if re.search(r'github\.com/Azure/azure-sdk-for-go.*cosmos|azcosmos|CosmosClient', code, re.IGNORECASE):
+            services_detected.append('Cosmos DB')
+        if re.search(r'github\.com/Azure/azure-sdk-for-go.*servicebus|azservicebus|ServiceBusClient', code, re.IGNORECASE):
+            services_detected.append('Service Bus')
+        if re.search(r'github\.com/Azure/azure-event-hubs-go|EventHubProducerClient', code, re.IGNORECASE):
+            services_detected.append('Event Hubs')
+        if re.search(r'github\.com/Azure/azure-sdk-for-go.*keyvault|azsecrets|SecretClient', code, re.IGNORECASE):
+            services_detected.append('Key Vault')
+        if re.search(r'github\.com/Azure/azure-sdk-for-go.*monitor|ApplicationInsightsClient', code, re.IGNORECASE):
+            services_detected.append('Application Insights')
+        
+        services_str = ', '.join(services_detected) if services_detected else 'Azure services'
+        
+        retry_note = "\n\n**THIS IS A RETRY - Previous attempt still contained Azure patterns. Be EXTREMELY thorough this time.**" if retry else ""
+        
+        prompt = f"""{skills_prompt}
+
+You are an expert Go code refactoring assistant. Transform the following Azure Go code to Google Cloud Platform (GCP) Go code.
+
+**ARCHITECTURAL REQUIREMENTS:**
+When generating the refactored code, you MUST follow Clean Architecture principles:
+- Use interfaces for external dependencies (GCP SDKs)
+- Keep business logic in domain services, not in infrastructure adapters
+- Use immutable structs (no exported setters) where possible
+- Include architectural intent documentation in Go doc comments
+- Follow Domain-Driven Design principles for domain models
+
+**CRITICAL REQUIREMENTS:**
+1. **ZERO AZURE CODE** - The output must contain NO Azure patterns, packages, or APIs
+2. **Complete transformation** - Every Azure service call must be replaced with its GCP equivalent
+3. **Correct Go syntax** - Output must be valid, compilable Go code
+4. **Proper imports** - Include all necessary GCP SDK imports
+5. **Preserve function structure** - Maintain function signatures, struct definitions, and structure
+6. **Correct API usage** - Use GCP Go APIs correctly, not Azure patterns with GCP imports
+7. **Context handling** - Preserve context.Context usage where appropriate
+
+**SERVICES DETECTED:** {services_str}
+
+**TRANSFORMATION RULES:**
+
+**Blob Storage → Cloud Storage:**
+- `github.com/Azure/azure-sdk-for-go/sdk/storage/azblob` → `cloud.google.com/go/storage`
+- `azblob.NewClient()` → `storage.NewClient(ctx)`
+- `client.UploadBuffer()` → `bucket.Object(name).NewWriter(ctx); w.Write(data); w.Close()`
+- `client.DownloadBuffer()` → `bucket.Object(name).NewReader(ctx); io.Copy(dest, r)`
+
+**Cosmos DB → Firestore:**
+- `github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos` → `cloud.google.com/go/firestore`
+- `azcosmos.NewClientWithKey()` → `firestore.NewClient(ctx, projectID)`
+- `client.CreateItem()` → `client.Collection(collectionName).Doc(documentID).Set(ctx, data)`
+- `client.ReadItem()` → `client.Collection(collectionName).Doc(documentID).Get(ctx)`
+
+**Service Bus → Pub/Sub:**
+- `github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus` → `cloud.google.com/go/pubsub`
+- `azservicebus.NewClientWithConnectionString()` → `pubsub.NewClient(ctx, projectID)`
+- `sender.SendMessage()` → `topic.Publish(ctx, &pubsub.Message{{ Data: []byte(messageBody) }})`
+- `receiver.ReceiveMessages()` → `sub.Receive(ctx, callback)`
+
+**Event Hubs → Pub/Sub:**
+- `github.com/Azure/azure-event-hubs-go` → `cloud.google.com/go/pubsub`
+- `hub.Send()` → `topic.Publish(ctx, &pubsub.Message{{ Data: data }})`
+- `hub.Receive()` → `sub.Receive(ctx, callback)`
+
+**Key Vault → Secret Manager:**
+- `github.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets` → `cloud.google.com/go/secretmanager/apiv1`
+- `azsecrets.NewClient()` → `secretmanager.NewClient(ctx)`
+- `client.GetSecret()` → `client.AccessSecretVersion(ctx, req)`
+- `client.SetSecret()` → `client.CreateSecret()` + `client.AddSecretVersion()`
+
+**Application Insights → Cloud Monitoring:**
+- `github.com/Azure/azure-sdk-for-go/sdk/monitor` → `cloud.google.com/go/monitoring/apiv3`, `cloud.google.com/go/logging`
+- `ApplicationInsightsClient` → `monitoring.MetricServiceClient` or `logging.Client`
+- `client.TrackEvent()` → `logging.Client().LogStruct()`
+- `client.TrackMetric()` → `monitoring.CreateTimeSeries()`
+
+**Environment Variables:**
+- `AZURE_STORAGE_CONNECTION_STRING` → `GOOGLE_APPLICATION_CREDENTIALS`
+- `COSMOS_ENDPOINT` → `GOOGLE_CLOUD_PROJECT`
+- `AZURE_KEY_VAULT_URL` → `GOOGLE_CLOUD_PROJECT`
+- `APPINSIGHTS_INSTRUMENTATION_KEY` → `GOOGLE_CLOUD_PROJECT`
+
+**Variable Naming:**
+- `blobClient` → `storageClient` or `client`
+- `cosmosClient` → `firestoreClient` or `client`
+- `serviceBusClient` → `pubsubClient` or `client`
+
+**Exception Handling:**
+- Azure SDK errors → GCP SDK errors
+- Preserve error handling patterns with appropriate GCP error types
+
+**Code Structure:**
+- Preserve function names, struct definitions
+- Preserve context.Context usage
+- Maintain proper Go formatting and indentation
+- Ensure all imports are correct and necessary
+- Use proper Go error handling: return errors, check err != nil
+
+**Go-specific:**
+- Preserve package declarations
+- Preserve exported/unexported function names (capitalization)
+- Use proper Go idioms and patterns
+- Ensure proper error handling with `if err != nil` checks
+
+{retry_note}
+
+**INPUT CODE:**
+```go
+{code}
+```
+
+**OUTPUT REQUIREMENTS:**
+- Return ONLY the transformed Go code
+- NO explanations, NO markdown formatting, NO code blocks
+- Just pure, compilable Go code
+- Ensure ALL Azure patterns are removed
+- Ensure ALL GCP APIs are used correctly
+- Preserve the complete function and struct structure
+- Use proper Go error handling
+
+**TRANSFORMED GCP CODE:**"""
+        
+        return prompt
+    
+    def _aggressive_go_azure_cleanup(self, code: str) -> str:
+        """Aggressive cleanup of Azure patterns in Go code"""
+        # Remove Azure SDK imports
+        code = re.sub(r'github\.com/Azure/azure-sdk-for-go/sdk/storage/azblob', 'cloud.google.com/go/storage', code)
+        code = re.sub(r'github\.com/Azure/azure-sdk-for-go/sdk/data/azcosmos', 'cloud.google.com/go/firestore', code)
+        code = re.sub(r'github\.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus', 'cloud.google.com/go/pubsub', code)
+        code = re.sub(r'github\.com/Azure/azure-event-hubs-go', 'cloud.google.com/go/pubsub', code)
+        code = re.sub(r'github\.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets', 'cloud.google.com/go/secretmanager/apiv1', code)
+        code = re.sub(r'github\.com/Azure/azure-sdk-for-go/sdk/monitor', 'cloud.google.com/go/monitoring/apiv3', code)
+        
+        # Replace Azure client creation
+        code = re.sub(r'azblob\.NewClient\(', 'storage.NewClient(', code)
+        code = re.sub(r'azcosmos\.NewClientWithKey\(', 'firestore.NewClient(', code)
+        code = re.sub(r'azservicebus\.NewClientWithConnectionString\(', 'pubsub.NewClient(', code)
+        code = re.sub(r'azsecrets\.NewClient\(', 'secretmanager.NewClient(', code)
+        
+        # Replace Azure method calls
+        code = re.sub(r'\.UploadBuffer\(', '.NewWriter(ctx); w.Write(', code)
+        code = re.sub(r'\.DownloadBuffer\(', '.NewReader(ctx); io.Copy(', code)
+        code = re.sub(r'\.CreateItem\(', '.Set(ctx, ', code)
+        code = re.sub(r'\.ReadItem\(', '.Get(ctx)', code)
+        code = re.sub(r'\.SendMessage\(', '.Publish(ctx, &pubsub.Message', code)
+        code = re.sub(r'\.GetSecret\(', '.AccessSecretVersion(ctx, req)', code)
+        code = re.sub(r'\.SetSecret\(', '.CreateSecret(ctx, req)', code)
+        
+        # Replace Azure environment variables
+        code = re.sub(r'AZURE_STORAGE_CONNECTION_STRING', 'GOOGLE_APPLICATION_CREDENTIALS', code)
+        code = re.sub(r'COSMOS_ENDPOINT', 'GOOGLE_CLOUD_PROJECT', code)
+        code = re.sub(r'AZURE_KEY_VAULT_URL', 'GOOGLE_CLOUD_PROJECT', code)
+        code = re.sub(r'APPINSIGHTS_INSTRUMENTATION_KEY', 'GOOGLE_CLOUD_PROJECT', code)
+        
+        return code
+    
+    def _has_azure_patterns(self, code: str, language: str = 'python') -> bool:
+        """Check if code still contains Azure patterns"""
+        if language == 'go':
+            azure_patterns = [
+                r'github\.com/Azure',
+                r'azblob\.',
+                r'azcosmos\.',
+                r'azservicebus\.',
+                r'azsecrets\.',
+                r'BlobServiceClient',
+                r'CosmosClient',
+                r'ServiceBusClient',
+                r'SecretClient',
+                r'AZURE_STORAGE_CONNECTION_STRING',
+                r'COSMOS_ENDPOINT',
+                r'AZURE_KEY_VAULT_URL'
+            ]
+        else:
+            azure_patterns = [
+                r'azure\.',
+                r'Azure\.',
+                r'BlobServiceClient',
+                r'CosmosClient',
+                r'ServiceBusClient',
+                r'AZURE_'
+            ]
+        
+        for pattern in azure_patterns:
+            if re.search(pattern, code, re.IGNORECASE):
+                return True
+        return False
+    
+    def _extract_code_from_response(self, response_text: str, language: str = 'python') -> str:
+        """Extract code from Gemini response, handling various formats"""
+        # Remove markdown code blocks
+        if language == 'go':
+            code_block_marker = '```go'
+        elif language == 'csharp':
+            code_block_marker = '```csharp'
+        elif language == 'java':
+            code_block_marker = '```java'
+        else:
+            code_block_marker = '```python'
+        
+        if code_block_marker in response_text:
+            parts = response_text.split(code_block_marker)
+            if len(parts) >= 2:
+                code = parts[1].split('```')[0].strip()
+                return code
+        
+        # If no code block, return as-is
+        return response_text.strip()
     
     def _aggressive_azure_cleanup(self, code: str) -> str:
         """
@@ -243,6 +640,10 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
                 return self._migrate_azure_container_instances_to_cloud_run(code)
             elif 'azure_app_service_to_cloud_run' in service_type:
                 return self._migrate_azure_app_service_to_cloud_run(code)
+            elif 'azure_key_vault_to_secret_manager' in service_type:
+                return self._migrate_azure_key_vault_to_secret_manager(code)
+            elif 'azure_application_insights_to_monitoring' in service_type:
+                return self._migrate_azure_application_insights_to_monitoring(code)
         
         # If no specific service migration, try to detect and migrate automatically
         return self._auto_detect_and_migrate(code)
@@ -266,6 +667,12 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
         
         if 'azure.eventhub' in result_code or 'EventHubProducerClient' in result_code:
             result_code = self._migrate_azure_event_hubs_to_pubsub(result_code)
+        
+        if 'azure.keyvault' in result_code or 'SecretClient' in result_code or 'KeyVaultClient' in result_code:
+            result_code = self._migrate_azure_key_vault_to_secret_manager(result_code)
+        
+        if 'azure.applicationinsights' in result_code or 'ApplicationInsightsClient' in result_code or 'TelemetryClient' in result_code:
+            result_code = self._migrate_azure_application_insights_to_monitoring(result_code)
         
         # Also check for AWS services and apply transformations
         if 'boto3' in result_code and 's3' in result_code.lower():
@@ -822,6 +1229,156 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
         
         return code
 
+    def _migrate_azure_key_vault_to_secret_manager(self, code: str) -> str:
+        """Migrate Azure Key Vault to Google Cloud Secret Manager"""
+        # Replace imports
+        code = re.sub(
+            r'from azure\.keyvault\.secrets import.*',
+            'from google.cloud import secretmanager',
+            code
+        )
+        code = re.sub(
+            r'from azure\.identity import.*',
+            'from google.auth import default',
+            code
+        )
+        code = re.sub(
+            r'import azure\.keyvault\.secrets',
+            'from google.cloud import secretmanager',
+            code
+        )
+        
+        # Replace SecretClient instantiation
+        code = re.sub(
+            r'(\w+)\s*=\s*SecretClient\(vault_url=([^,]+),\s*credential=([^\)]+)\)',
+            r'\1 = secretmanager.SecretManagerServiceClient()',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*SecretClient\(([^\)]+)\)',
+            r'\1 = secretmanager.SecretManagerServiceClient()',
+            code
+        )
+        
+        # Replace get_secret() -> access_secret_version()
+        code = re.sub(
+            r'(\w+)\.get_secret\(([^\)]+)\)',
+            r'\1.access_secret_version(request={"name": \2})',
+            code
+        )
+        
+        # Replace set_secret() -> create_secret() / add_secret_version()
+        code = re.sub(
+            r'(\w+)\.set_secret\(name=([^,]+),\s*value=([^\)]+)\)',
+            r'\1.create_secret(request={"parent": parent, "secret_id": \2, "secret": {"replication": {"automatic": {}}}})\n    \1.add_secret_version(request={"parent": parent + "/secrets/" + \2, "payload": {"data": \3.encode("utf-8")}})',
+            code
+        )
+        
+        # Replace delete_secret() -> delete_secret()
+        code = re.sub(
+            r'(\w+)\.delete_secret\(name=([^\)]+)\)',
+            r'\1.delete_secret(request={"name": \2})',
+            code
+        )
+        
+        # Replace list_secrets() -> list_secrets()
+        code = re.sub(
+            r'(\w+)\.list_secrets\(\)',
+            r'\1.list_secrets(request={"parent": parent})',
+            code
+        )
+        
+        # Replace environment variables
+        code = re.sub(
+            r'AZURE_KEY_VAULT_URL',
+            'GOOGLE_CLOUD_PROJECT',
+            code
+        )
+        code = re.sub(
+            r'AZURE_CLIENT_ID|AZURE_CLIENT_SECRET|AZURE_TENANT_ID',
+            'GOOGLE_APPLICATION_CREDENTIALS',
+            code
+        )
+        
+        return code
+
+    def _migrate_azure_application_insights_to_monitoring(self, code: str) -> str:
+        """Migrate Azure Application Insights to Google Cloud Monitoring"""
+        # Replace imports
+        code = re.sub(
+            r'from azure\.applicationinsights import.*',
+            'from google.cloud import monitoring_v3\nfrom google.cloud import logging',
+            code
+        )
+        code = re.sub(
+            r'import applicationinsights',
+            'from google.cloud import monitoring_v3\nfrom google.cloud import logging',
+            code
+        )
+        
+        # Replace ApplicationInsightsClient -> MetricServiceClient
+        code = re.sub(
+            r'(\w+)\s*=\s*ApplicationInsightsClient\(([^\)]+)\)',
+            r'\1 = monitoring_v3.MetricServiceClient()',
+            code
+        )
+        
+        # Replace TelemetryClient -> Logging Client
+        code = re.sub(
+            r'(\w+)\s*=\s*TelemetryClient\(instrumentation_key=([^\)]+)\)',
+            r'\1 = logging.Client()',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*TelemetryClient\(([^\)]+)\)',
+            r'\1 = logging.Client()',
+            code
+        )
+        
+        # Replace track_event() -> log_struct() with event data
+        code = re.sub(
+            r'(\w+)\.track_event\(name=([^,]+),\s*properties=([^\)]+)\)',
+            r'\1.log_struct({"event_name": \2, "properties": \3})',
+            code
+        )
+        
+        # Replace track_exception() -> log_struct() with exception data
+        code = re.sub(
+            r'(\w+)\.track_exception\(exception=([^,]+),\s*properties=([^\)]+)\)',
+            r'\1.log_struct({"exception": str(\2), "properties": \3, "severity": "ERROR"})',
+            code
+        )
+        
+        # Replace track_metric() -> create_time_series()
+        code = re.sub(
+            r'(\w+)\.track_metric\(name=([^,]+),\s*value=([^\)]+)\)',
+            r'# Create time series for metric\n    series = monitoring_v3.TimeSeries()\n    series.metric.type = "custom.googleapis.com/" + \2\n    point = monitoring_v3.Point()\n    point.value.double_value = \3\n    point.interval.end_time.seconds = int(time.time())\n    series.points = [point]\n    \1.create_time_series(request={"name": project_name, "time_series": [series]})',
+            code
+        )
+        
+        # Replace track_trace() -> log_text()
+        code = re.sub(
+            r'(\w+)\.track_trace\(message=([^\)]+)\)',
+            r'\1.log_text(\2)',
+            code
+        )
+        
+        # Replace flush() -> no-op (GCP logging is async)
+        code = re.sub(
+            r'(\w+)\.flush\(\)',
+            r'# Flush not needed - GCP logging is async',
+            code
+        )
+        
+        # Replace environment variables
+        code = re.sub(
+            r'APPINSIGHTS_INSTRUMENTATION_KEY|APPINSIGHTS_CONNECTION_STRING',
+            'GOOGLE_CLOUD_PROJECT',
+            code
+        )
+        
+        return code
+
     # AWS migration methods (from the original engine)
     def _migrate_aws_s3_to_gcs(self, code: str) -> str:
         """Migrate AWS S3 to Google Cloud Storage"""
@@ -1257,6 +1814,103 @@ class AzureExtendedJavaTransformer(BaseAzureExtendedTransformer):
             code
         )
         
+        return code
+
+
+class AzureExtendedGoTransformer(BaseAzureExtendedTransformer):
+    """Extended transformer for Go code - uses Gemini API for Azure transformations"""
+    
+    def transform(self, code: str, recipe: Dict[str, Any]) -> str:
+        """Transform Go code based on the recipe"""
+        # Go transformations are handled by Gemini API in transform_code()
+        # This is a fallback transformer for regex-based simple patterns
+        operation = recipe.get('operation', '')
+        service_type = recipe.get('service_type', '')
+        
+        if operation == 'service_migration' and service_type:
+            if 'azure_blob_storage_to_gcs' in service_type:
+                return self._migrate_azure_blob_storage_to_gcs(code)
+            elif 'azure_functions_to_cloud_functions' in service_type:
+                return self._migrate_azure_functions_to_cloud_functions(code)
+            elif 'azure_cosmos_db_to_firestore' in service_type:
+                return self._migrate_azure_cosmos_db_to_firestore(code)
+            elif 'azure_service_bus_to_pubsub' in service_type:
+                return self._migrate_azure_service_bus_to_pubsub(code)
+            elif 'azure_event_hubs_to_pubsub' in service_type:
+                return self._migrate_azure_event_hubs_to_pubsub(code)
+            elif 'azure_key_vault_to_secret_manager' in service_type:
+                return self._migrate_azure_key_vault_to_secret_manager(code)
+            elif 'azure_application_insights_to_monitoring' in service_type:
+                return self._migrate_azure_application_insights_to_monitoring(code)
+        
+        return code
+    
+    def _migrate_azure_blob_storage_to_gcs(self, code: str) -> str:
+        """Migrate Azure Blob Storage Go code to Google Cloud Storage (fallback regex)"""
+        code = re.sub(
+            r'github\.com/Azure/azure-sdk-for-go/sdk/storage/azblob',
+            'cloud.google.com/go/storage',
+            code
+        )
+        code = re.sub(
+            r'azblob\.NewClient',
+            'storage.NewClient',
+            code
+        )
+        return code
+    
+    def _migrate_azure_functions_to_cloud_functions(self, code: str) -> str:
+        """Migrate Azure Functions Go code to Google Cloud Functions (fallback regex)"""
+        code = re.sub(
+            r'github\.com/Azure/azure-functions-go',
+            'cloud.google.com/go/functions',
+            code
+        )
+        return code
+    
+    def _migrate_azure_cosmos_db_to_firestore(self, code: str) -> str:
+        """Migrate Azure Cosmos DB Go code to Google Firestore (fallback regex)"""
+        code = re.sub(
+            r'github\.com/Azure/azure-sdk-for-go/sdk/data/azcosmos',
+            'cloud.google.com/go/firestore',
+            code
+        )
+        return code
+    
+    def _migrate_azure_service_bus_to_pubsub(self, code: str) -> str:
+        """Migrate Azure Service Bus Go code to Google Pub/Sub (fallback regex)"""
+        code = re.sub(
+            r'github\.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus',
+            'cloud.google.com/go/pubsub',
+            code
+        )
+        return code
+    
+    def _migrate_azure_event_hubs_to_pubsub(self, code: str) -> str:
+        """Migrate Azure Event Hubs Go code to Google Pub/Sub (fallback regex)"""
+        code = re.sub(
+            r'github\.com/Azure/azure-event-hubs-go',
+            'cloud.google.com/go/pubsub',
+            code
+        )
+        return code
+    
+    def _migrate_azure_key_vault_to_secret_manager(self, code: str) -> str:
+        """Migrate Azure Key Vault Go code to Google Secret Manager (fallback regex)"""
+        code = re.sub(
+            r'github\.com/Azure/azure-sdk-for-go/sdk/keyvault/azsecrets',
+            'cloud.google.com/go/secretmanager/apiv1',
+            code
+        )
+        return code
+    
+    def _migrate_azure_application_insights_to_monitoring(self, code: str) -> str:
+        """Migrate Azure Application Insights Go code to Google Cloud Monitoring (fallback regex)"""
+        code = re.sub(
+            r'github\.com/Azure/azure-sdk-for-go/sdk/monitor',
+            'cloud.google.com/go/monitoring/apiv3',
+            code
+        )
         return code
 
 
