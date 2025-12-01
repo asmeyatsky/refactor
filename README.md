@@ -7,7 +7,7 @@ The Universal Cloud Refactor Agent is an autonomous system designed to automate 
 - **Multi-Agent Architecture**: Implements Planner, Refactoring Engine, and Verification agents
 - **AST-Powered Transformations**: Uses Abstract Syntax Trees for reliable code transformations
 - **Multi-Cloud Migration Support**: Migrates AWS and Azure services to GCP equivalents
-- **Multi-Language Support** 🆕: Supports Python, Java, and C# (.NET) with Gemini API-powered transformations
+- **Multi-Language Support** 🆕: Supports Python, Java, C# (.NET), JavaScript/Node.js, and Go (golang) with Gemini API-powered transformations
 - **Auto-Detection**: Automatically detects AWS/Azure services in code and suggests migrations
 - **Comprehensive Verification**: Ensures behavioral preservation through testing
 - **Security Validation**: Implements mandatory security checks
@@ -36,7 +36,7 @@ The Universal Cloud Refactor Agent is an autonomous system designed to automate 
 - **EKS to GKE**: Container Orchestration
 - **Fargate to Cloud Run**: Serverless Container Computing
 
-### Azure Services
+### Azure Services (Top 15)
 - **Blob Storage to Cloud Storage**: Object Storage
 - **Functions to Cloud Functions**: Serverless Compute
 - **Cosmos DB to Firestore**: NoSQL Database
@@ -50,10 +50,27 @@ The Universal Cloud Refactor Agent is an autonomous system designed to automate 
 - **AKS to GKE**: Container Orchestration
 - **Container Instances to Cloud Run**: Container Service
 - **App Service to Cloud Run**: Web Application Hosting
+- **Key Vault to Secret Manager** 🆕: Secrets Management
+- **Application Insights to Cloud Monitoring** 🆕: Application Performance Monitoring
 
 ## Architecture
 
-The system follows clean/hexagonal architecture principles:
+The system follows clean/hexagonal architecture principles as defined in [SKILL.md](SKILL.md):
+
+**Architectural Principles:**
+- **Separation of Concerns (SoC)**: Each module has a single, well-defined responsibility
+- **Domain-Driven Design (DDD)**: Software design reflects the business domain
+- **Clean/Hexagonal Architecture**: Business logic is independent of frameworks and infrastructure
+- **High Cohesion, Low Coupling**: Related functionality is grouped together, dependencies minimized
+
+**Non-Negotiable Rules:**
+1. Zero Business Logic in Infrastructure Components
+2. Interface-First Development (Ports and Adapters)
+3. Immutable Domain Models
+4. Mandatory Testing Coverage
+5. Documentation of Architectural Intent
+
+All code generation and transformations follow these principles automatically via SKILL.md integration.
 
 ```
 Domain Layer
@@ -416,7 +433,6 @@ The system is designed to:
 
 ### In Development 🔄
 - Enhanced IaC migration patterns
-- Additional programming language support (Go, Node.js)
 - Advanced dependency analysis
 - CI/CD pipeline integration
 
@@ -434,19 +450,31 @@ See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed 
 ### Python ✅
 - **Status**: Production Ready
 - **Features**: AST-powered transformations, comprehensive service coverage
-- **Test Coverage**: 100% of AWS services
+- **Test Coverage**: 100% of AWS and Azure services
 
 ### Java ✅
 - **Status**: Production Ready (Gemini API Enhanced)
 - **Features**: Intelligent LLM-powered transformations, preserves class structure
-- **Test Coverage**: 100% of AWS services
+- **Test Coverage**: 100% of AWS and Azure services
 - **See**: [JAVA_MIGRATION_STATUS.md](JAVA_MIGRATION_STATUS.md)
 
 ### C# (.NET) ✅
 - **Status**: Production Ready (Gemini API Enhanced)
 - **Features**: Intelligent LLM-powered transformations, preserves C# structure
-- **Test Coverage**: 100% of AWS services
+- **Test Coverage**: 100% of AWS and Azure services
 - **See**: [CSHARP_MIGRATION_STATUS.md](CSHARP_MIGRATION_STATUS.md)
+
+### JavaScript/Node.js ✅
+- **Status**: Production Ready (Gemini API Enhanced)
+- **Features**: Intelligent LLM-powered transformations, preserves JavaScript/Node.js patterns
+- **Test Coverage**: AWS and Azure services supported
+
+### Go (golang) ✅ 🆕
+- **Status**: Production Ready (Gemini API Enhanced)
+- **Features**: Intelligent LLM-powered transformations, preserves Go/golang idioms and patterns
+- **Test Coverage**: AWS and Azure services supported
+- **Architecture**: Follows SKILL.md principles with interfaces, immutable structs, and proper error handling
+- **Language Aliases**: Supports both `go` and `golang` language identifiers
 
 ## Advanced Features
 
@@ -491,6 +519,7 @@ See [REPOSITORY_LEVEL_MIGRATION.md](REPOSITORY_LEVEL_MIGRATION.md) for detailed 
 
 ## Documentation
 
+- **[SKILL.md](SKILL.md)**: Architectural principles and code generation standards (used by all LLM transformations)
 - **[accelerator_detail.md](accelerator_detail.md)**: Comprehensive accelerator documentation
 - **[MIGRATION_GUIDE.md](MIGRATION_GUIDE.md)**: Detailed migration guide with examples
 - **[DEPLOYMENT.md](DEPLOYMENT.md)**: Deployment instructions
