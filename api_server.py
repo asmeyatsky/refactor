@@ -36,19 +36,48 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Add CORS middleware FIRST - must be before other middleware
+# Configure CORS origins
 allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001")
 allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
 
-# Use Starlette CORSMiddleware directly for better control
-app.add_middleware(
-    StarletteCORSMiddleware,
-    allow_origins=allowed_origins,  # List of allowed origins
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
-    allow_headers=["*"],
-    expose_headers=["*"],
-)
+# Custom CORS middleware - ensures CORS headers are always set
+@app.middleware("http")
+async def cors_middleware(request: Request, call_next):
+    """Custom CORS middleware to ensure headers are always set correctly"""
+    origin = request.headers.get("Origin", "")
+    
+    # Handle preflight OPTIONS requests
+    if request.method == "OPTIONS":
+        # Allow all origins for development (you can restrict this in production)
+        if origin:
+            from starlette.responses import Response
+            return Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Max-Age": "600",
+                }
+            )
+        else:
+            from starlette.responses import Response
+            return Response(status_code=403)
+    
+    # Process the request
+    response = await call_next(request)
+    
+    # Add CORS headers to all responses if origin is present
+    # For development, allow all localhost origins
+    if origin:
+        # Use setdefault to avoid overwriting existing headers
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+    
+    return response
 
 # Add authentication middleware if enabled
 REQUIRE_AUTH = os.getenv("REQUIRE_AUTH", "false").lower() == "true"
