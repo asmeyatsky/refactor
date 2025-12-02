@@ -3,7 +3,10 @@ import axios from 'axios';
 
 // Use relative URLs by default (works for both dev and production)
 // Set REACT_APP_API_BASE_URL environment variable to override (e.g., for local dev)
-const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '';
+// In development, proxy in package.json will forward /api/* requests to http://localhost:8000
+// Default to localhost:8000 for local development if not set
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 
+  (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
