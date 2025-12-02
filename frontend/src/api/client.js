@@ -8,6 +8,11 @@ import axios from 'axios';
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 
   (process.env.NODE_ENV === 'development' ? 'http://localhost:8000' : '');
 
+// Log API base URL for debugging
+if (process.env.NODE_ENV === 'development') {
+  console.log('API Base URL:', API_BASE_URL || '(using proxy)');
+}
+
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
   timeout: 600000, // 10 minutes for long-running repository operations
@@ -28,6 +33,10 @@ export const migrateCodeSnippet = async ({ code, language, services, cloudProvid
     return response.data;
   } catch (error) {
     console.error('Migration error:', error);
+    // Provide more detailed error messages for network issues
+    if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
+      throw new Error('Cannot connect to API server. Please ensure the API server is running on http://localhost:8000');
+    }
     throw new Error(error.response?.data?.detail || error.message || 'Migration failed');
   }
 };
@@ -43,6 +52,10 @@ export const analyzeRepository = async (repositoryUrl, branch = 'main', token = 
     return response.data;
   } catch (error) {
     console.error('Repository analysis error:', error);
+    // Provide more detailed error messages for network issues
+    if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error')) {
+      throw new Error('Cannot connect to API server. Please ensure the API server is running on http://localhost:8000');
+    }
     throw new Error(error.response?.data?.detail || error.message || 'Repository analysis failed');
   }
 };

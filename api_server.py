@@ -5,6 +5,7 @@ Provides API endpoints for the frontend application
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.cors import CORSMiddleware as StarletteCORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -33,6 +34,20 @@ app = FastAPI(
     title="Cloud Refactor Agent API",
     description="API for cloud service refactoring and migration",
     version="1.0.0"
+)
+
+# Add CORS middleware FIRST - must be before other middleware
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001")
+allowed_origins = [origin.strip() for origin in allowed_origins_str.split(",") if origin.strip()]
+
+# Use Starlette CORSMiddleware directly for better control
+app.add_middleware(
+    StarletteCORSMiddleware,
+    allow_origins=allowed_origins,  # List of allowed origins
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Add authentication middleware if enabled
@@ -88,16 +103,6 @@ if REQUIRE_AUTH:
         
         response = await call_next(request)
         return response
-
-# Add CORS middleware to allow frontend requests
-allowed_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001").split(",")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # In-memory storage for migration jobs (in production, use a database)
 migration_jobs = {}
