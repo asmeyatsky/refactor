@@ -32,10 +32,14 @@ class AzureExtendedASTTransformationEngine:
             'golang': AzureExtendedGoTransformer(self.aws_service_mapper, self.azure_service_mapper)  # Alias
         }
     
-    def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> str:
+    def transform_code(self, code: str, language: str, transformation_recipe: Dict[str, Any]) -> tuple[str, dict]:
         """
         Transform code based on the transformation recipe
         Ensures the output is syntactically correct and contains no AWS/Azure references.
+        
+        Returns:
+            tuple: (transformed_code, variable_mapping) where variable_mapping is a dict
+                   mapping old variable names to new variable names
         """
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
@@ -80,7 +84,13 @@ class AzureExtendedASTTransformationEngine:
                 transformed_code = self._aggressive_azure_cleanup(transformed_code)
                 transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
         
-        return transformed_code
+        # Return tuple with variable mapping (empty dict for now, can be enhanced later)
+        variable_mapping = {}
+        if hasattr(self.transformers.get(language), '_variable_mappings'):
+            code_id = id(code)
+            variable_mapping = self.transformers[language]._variable_mappings.get(code_id, {})
+        
+        return transformed_code, variable_mapping
     
     def _transform_azure_with_gemini_primary(self, code: str, recipe: Dict[str, Any], retry: bool = False, language: str = 'python') -> str:
         """Use Gemini as the PRIMARY transformation engine for Azure to GCP migrations"""
