@@ -146,9 +146,20 @@ class ValidateGCPCodeUseCase:
             progress_callback("Starting validation...", 0.0)
         
         # Step 1: Syntax validation (20%)
-        syntax_valid = self._validate_syntax(code, language)
-        if progress_callback:
-            progress_callback("Syntax validation complete", 20.0)
+        # Skip syntax validation for shell/bash scripts
+        is_shell_script = (
+            code.strip().startswith('#!') or
+            bool(re.search(r'^\s*(az|aws|gcloud|kubectl|docker)\s+', code, re.MULTILINE))
+        )
+        
+        if is_shell_script:
+            syntax_valid = True  # Shell scripts don't need Python syntax validation
+            if progress_callback:
+                progress_callback("Skipping syntax validation for shell script", 20.0)
+        else:
+            syntax_valid = self._validate_syntax(code, language)
+            if progress_callback:
+                progress_callback("Syntax validation complete", 20.0)
         
         if not syntax_valid:
             errors.append("Code contains syntax errors")
@@ -215,6 +226,16 @@ class ValidateGCPCodeUseCase:
         if not code or not code.strip():
             # Empty code is syntactically valid (though may not be useful)
             return True
+        
+        # Check if code is shell/bash script - skip Python syntax validation
+        is_shell_script = (
+            code.strip().startswith('#!') or
+            bool(re.search(r'^\s*(az|aws|gcloud|kubectl|docker)\s+', code, re.MULTILINE))
+        )
+        
+        if is_shell_script:
+            logger.info("Detected shell/bash script - skipping Python syntax validation")
+            return True  # Shell scripts are valid in their own context
             
         try:
             if language == 'python':

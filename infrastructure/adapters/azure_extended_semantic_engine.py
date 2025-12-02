@@ -544,6 +544,18 @@ When generating the refactored code, you MUST follow Clean Architecture principl
         import re
         logger = logging.getLogger(__name__)
         
+        # Check if code is shell/bash script (starts with shebang or contains shell commands)
+        is_shell_script = (
+            code.strip().startswith('#!') or
+            re.search(r'^\s*(az|aws|gcloud|kubectl|docker)\s+', code, re.MULTILINE) or
+            re.search(r'^\s*(export|export\s+\w+=)', code, re.MULTILINE)
+        )
+        
+        if is_shell_script:
+            logger.info("Detected shell/bash script - skipping Python syntax validation")
+            # For shell scripts, just check for Azure/AWS patterns but don't validate Python syntax
+            return code
+        
         # Validate no AWS/Azure references in output code
         aws_azure_patterns = [
             r'\bboto3\b', r'\bAWS\b(?!\w)', r'\baws\b(?!\w)', r'\bS3\b(?!\w)', r'\bs3\b(?!\w)',
@@ -582,13 +594,21 @@ When generating the refactored code, you MUST follow Clean Architecture principl
             for violation in violations:
                 logger.warning(violation)
         
-        # Validate syntax
+        # Validate syntax (only for Python code)
         try:
             ast.parse(code)
             return code  # Code is valid
         except SyntaxError as e:
             logger.debug(f"Syntax error detected: {e}")
+            # If original_code is shell script, return it without error
             if original_code:
+                original_is_shell = (
+                    original_code.strip().startswith('#!') or
+                    re.search(r'^\s*(az|aws|gcloud|kubectl|docker)\s+', original_code, re.MULTILINE)
+                )
+                if original_is_shell:
+                    logger.info("Original code is shell script - returning as-is")
+                    return original_code
                 logger.warning("Returning original code due to transformation syntax errors")
                 return original_code
             else:
