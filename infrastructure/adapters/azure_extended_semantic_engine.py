@@ -41,6 +41,17 @@ class AzureExtendedASTTransformationEngine:
             tuple: (transformed_code, variable_mapping) where variable_mapping is a dict
                    mapping old variable names to new variable names
         """
+        # Check if code is shell/bash script with Azure CLI commands FIRST (before language check)
+        is_shell_script = (
+            code.strip().startswith('#!') or
+            re.search(r'^\s*(az|aws|gcloud|kubectl|docker)\s+', code, re.MULTILINE)
+        )
+        
+        if is_shell_script:
+            # Transform Azure CLI commands to GCP CLI commands
+            transformed_code = self._transform_azure_cli_to_gcp_cli(code, transformation_recipe)
+            return transformed_code, {}
+        
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
         
@@ -91,6 +102,257 @@ class AzureExtendedASTTransformationEngine:
             variable_mapping = self.transformers[language]._variable_mappings.get(code_id, {})
         
         return transformed_code, variable_mapping
+    
+    def _transform_azure_cli_to_gcp_cli(self, code: str, transformation_recipe: Dict[str, Any]) -> str:
+        """
+        Transform Azure CLI commands to GCP CLI commands
+        
+        Examples:
+        - az group create --name my-resource-group --location westus2
+          → gcloud projects create my-resource-group --name="my-resource-group"
+        
+        - az storage account create -n my-storage-account-name -g my-resource-group
+          → gcloud storage buckets create gs://my-storage-account-name --project=my-resource-group
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Transforming Azure CLI commands to GCP CLI commands")
+        
+        result = code
+        lines = result.split('\n')
+        transformed_lines = []
+        
+        # Azure location to GCP region mapping
+        azure_to_gcp_regions = {
+            'eastus': 'us-east1',
+            'eastus2': 'us-east4',
+            'westus': 'us-west1',
+            'westus2': 'us-west2',
+            'westus3': 'us-west3',
+            'centralus': 'us-central1',
+            'southcentralus': 'us-south1',
+            'northcentralus': 'us-north1',
+            'canadacentral': 'northamerica-northeast1',
+            'canadaeast': 'northamerica-northeast2',
+            'brazilsouth': 'southamerica-east1',
+            'westeurope': 'europe-west1',
+            'northeurope': 'europe-north1',
+            'uksouth': 'europe-west2',
+            'ukwest': 'europe-west2',
+            'francecentral': 'europe-west1',
+            'germanywestcentral': 'europe-west3',
+            'switzerlandnorth': 'europe-west6',
+            'norwayeast': 'europe-north1',
+            'southeastasia': 'asia-southeast1',
+            'eastasia': 'asia-east1',
+            'japaneast': 'asia-northeast1',
+            'japanwest': 'asia-northeast2',
+            'koreacentral': 'asia-northeast3',
+            'australiaeast': 'australia-southeast1',
+            'australiasoutheast': 'australia-southeast2',
+            'southafricanorth': 'africa-south1',
+            'uaenorth': 'me-west1',
+            'centralindia': 'asia-south1',
+            'southindia': 'asia-south2',
+            'westindia': 'asia-south1',
+        }
+        
+        for line in lines:
+            original_line = line
+            stripped = line.strip()
+            
+            # Skip empty lines and comments (but preserve them)
+            if not stripped or stripped.startswith('#'):
+                transformed_lines.append(line)
+                continue
+            
+            # Transform: az group create --name <name> --location <location>
+            # → gcloud projects create <project-id> --name="<name>" --labels=location=<gcp-region>
+            if re.match(r'^\s*az\s+group\s+create', stripped, re.IGNORECASE):
+                # Extract name and location
+                name_match = re.search(r'--name\s+(\S+)', stripped, re.IGNORECASE)
+                location_match = re.search(r'--location\s+(\S+)', stripped, re.IGNORECASE)
+                
+                if name_match:
+                    group_name = name_match.group(1)
+                    project_id = group_name.replace('-', '').lower()[:30]  # GCP project IDs have restrictions
+                    
+                    gcp_command = f'gcloud projects create {project_id} --name="{group_name}"'
+                    
+                    if location_match:
+                        azure_location = location_match.group(1).lower()
+                        gcp_region = azure_to_gcp_regions.get(azure_location, 'us-central1')
+                        gcp_command += f' --labels=location={gcp_region}'
+                    
+                    # Preserve comment if present
+                    comment = ''
+                    if '#' in line:
+                        comment_part = line.split('#', 1)[1]
+                        comment = f'  # {comment_part.strip()}'
+                    
+                    transformed_lines.append(f'{gcp_command}{comment}')
+                    logger.info(f"Transformed: {stripped} → {gcp_command}")
+                else:
+                    transformed_lines.append(line)
+            
+            # Transform: az storage account create -n <name> -g <group>
+            # → gcloud storage buckets create gs://<bucket-name> --project=<project-id>
+            elif re.match(r'^\s*az\s+storage\s+account\s+create', stripped, re.IGNORECASE):
+                # Extract name and resource group
+                name_match = re.search(r'[-]n\s+(\S+)', stripped, re.IGNORECASE)
+                group_match = re.search(r'[-]g\s+(\S+)', stripped, re.IGNORECASE)
+                
+                if name_match:
+                    storage_name = name_match.group(1)
+                    bucket_name = storage_name.replace('-', '').lower()
+                    
+                    # GCP bucket names must be globally unique and lowercase
+                    bucket_name = re.sub(r'[^a-z0-9-]', '', bucket_name)
+                    
+                    project_id = bucket_name
+                    if group_match:
+                        project_id = group_match.group(1).replace('-', '').lower()[:30]
+                    
+                    gcp_command = f'gcloud storage buckets create gs://{bucket_name} --project={project_id}'
+                    
+                    # Preserve comment if present
+                    comment = ''
+                    if '#' in line:
+                        comment_part = line.split('#', 1)[1]
+                        comment = f'  # {comment_part.strip()}'
+                    
+                    transformed_lines.append(f'{gcp_command}{comment}')
+                    logger.info(f"Transformed: {stripped} → {gcp_command}")
+                else:
+                    transformed_lines.append(line)
+            
+            # Transform: az storage account show -n <name> -g <group>
+            # → gcloud storage buckets describe gs://<bucket-name> --project=<project-id>
+            elif re.match(r'^\s*az\s+storage\s+account\s+show', stripped, re.IGNORECASE):
+                name_match = re.search(r'[-]n\s+(\S+)', stripped, re.IGNORECASE)
+                group_match = re.search(r'[-]g\s+(\S+)', stripped, re.IGNORECASE)
+                
+                if name_match:
+                    storage_name = name_match.group(1)
+                    bucket_name = storage_name.replace('-', '').lower()
+                    bucket_name = re.sub(r'[^a-z0-9-]', '', bucket_name)
+                    
+                    project_id = bucket_name
+                    if group_match:
+                        project_id = group_match.group(1).replace('-', '').lower()[:30]
+                    
+                    gcp_command = f'gcloud storage buckets describe gs://{bucket_name} --project={project_id}'
+                    
+                    comment = ''
+                    if '#' in line:
+                        comment_part = line.split('#', 1)[1]
+                        comment = f'  # {comment_part.strip()}'
+                    
+                    transformed_lines.append(f'{gcp_command}{comment}')
+                else:
+                    transformed_lines.append(line)
+            
+            # Transform: az storage blob upload -f <file> -c <container> -n <blob-name> --account-name <account>
+            # → gsutil cp <file> gs://<bucket-name>/<blob-name>
+            elif re.match(r'^\s*az\s+storage\s+blob\s+upload', stripped, re.IGNORECASE):
+                file_match = re.search(r'[-]f\s+(\S+)', stripped, re.IGNORECASE)
+                container_match = re.search(r'[-]c\s+(\S+)', stripped, re.IGNORECASE)
+                blob_match = re.search(r'[-]n\s+(\S+)', stripped, re.IGNORECASE)
+                account_match = re.search(r'--account-name\s+(\S+)', stripped, re.IGNORECASE)
+                
+                if file_match and container_match:
+                    file_path = file_match.group(1)
+                    container = container_match.group(1)
+                    blob_name = blob_match.group(1) if blob_match else file_path.split('/')[-1]
+                    
+                    bucket_name = container
+                    if account_match:
+                        bucket_name = account_match.group(1).replace('-', '').lower()
+                    
+                    gcp_command = f'gsutil cp {file_path} gs://{bucket_name}/{blob_name}'
+                    
+                    comment = ''
+                    if '#' in line:
+                        comment_part = line.split('#', 1)[1]
+                        comment = f'  # {comment_part.strip()}'
+                    
+                    transformed_lines.append(f'{gcp_command}{comment}')
+                else:
+                    transformed_lines.append(line)
+            
+            # Transform: az storage blob download -c <container> -n <blob-name> -f <file> --account-name <account>
+            # → gsutil cp gs://<bucket-name>/<blob-name> <file>
+            elif re.match(r'^\s*az\s+storage\s+blob\s+download', stripped, re.IGNORECASE):
+                container_match = re.search(r'[-]c\s+(\S+)', stripped, re.IGNORECASE)
+                blob_match = re.search(r'[-]n\s+(\S+)', stripped, re.IGNORECASE)
+                file_match = re.search(r'[-]f\s+(\S+)', stripped, re.IGNORECASE)
+                account_match = re.search(r'--account-name\s+(\S+)', stripped, re.IGNORECASE)
+                
+                if container_match and blob_match and file_match:
+                    container = container_match.group(1)
+                    blob_name = blob_match.group(1)
+                    file_path = file_match.group(1)
+                    
+                    bucket_name = container
+                    if account_match:
+                        bucket_name = account_match.group(1).replace('-', '').lower()
+                    
+                    gcp_command = f'gsutil cp gs://{bucket_name}/{blob_name} {file_path}'
+                    
+                    comment = ''
+                    if '#' in line:
+                        comment_part = line.split('#', 1)[1]
+                        comment = f'  # {comment_part.strip()}'
+                    
+                    transformed_lines.append(f'{gcp_command}{comment}')
+                else:
+                    transformed_lines.append(line)
+            
+            # Transform: az storage container create -n <container> --account-name <account>
+            # → gcloud storage buckets create gs://<bucket-name> --project=<project-id>
+            elif re.match(r'^\s*az\s+storage\s+container\s+create', stripped, re.IGNORECASE):
+                container_match = re.search(r'[-]n\s+(\S+)', stripped, re.IGNORECASE)
+                account_match = re.search(r'--account-name\s+(\S+)', stripped, re.IGNORECASE)
+                
+                if container_match:
+                    container = container_match.group(1)
+                    bucket_name = container.replace('-', '').lower()
+                    bucket_name = re.sub(r'[^a-z0-9-]', '', bucket_name)
+                    
+                    project_id = bucket_name
+                    if account_match:
+                        project_id = account_match.group(1).replace('-', '').lower()[:30]
+                    
+                    gcp_command = f'gcloud storage buckets create gs://{bucket_name} --project={project_id}'
+                    
+                    comment = ''
+                    if '#' in line:
+                        comment_part = line.split('#', 1)[1]
+                        comment = f'  # {comment_part.strip()}'
+                    
+                    transformed_lines.append(f'{gcp_command}{comment}')
+                else:
+                    transformed_lines.append(line)
+            
+            # Keep other az commands but add a comment suggesting GCP equivalent
+            elif re.match(r'^\s*az\s+', stripped, re.IGNORECASE):
+                # Add comment suggesting manual review
+                if '#' not in line:
+                    transformed_lines.append(f'{line}  # TODO: Review and convert to GCP CLI (gcloud) equivalent')
+                else:
+                    transformed_lines.append(line)
+            
+            # Keep all other lines as-is
+            else:
+                transformed_lines.append(line)
+        
+        result = '\n'.join(transformed_lines)
+        
+        # Final cleanup: replace any remaining Azure references
+        result = re.sub(r'\baz\s+group\b', 'gcloud projects', result, flags=re.IGNORECASE)
+        result = re.sub(r'\baz\s+storage\b', 'gcloud storage', result, flags=re.IGNORECASE)
+        
+        return result
     
     def _transform_azure_with_gemini_primary(self, code: str, recipe: Dict[str, Any], retry: bool = False, language: str = 'python') -> str:
         """Use Gemini as the PRIMARY transformation engine for Azure to GCP migrations"""
