@@ -43,9 +43,26 @@ class AnalyzeRepositoryUseCase:
             
         Returns:
             Dict with repository_id, mar, and repository object
+            
+        Raises:
+            ValueError: If repository_url is invalid
         """
+        # Input validation
+        if not repository_url or not isinstance(repository_url, str):
+            raise ValueError("repository_url must be a non-empty string")
+        
+        repository_url = repository_url.strip()
+        if not repository_url:
+            raise ValueError("repository_url cannot be empty")
+        
+        if branch is not None and not isinstance(branch, str):
+            raise ValueError("branch must be a string or None")
+        
         # Detect provider
-        provider = self.git_adapter.detect_provider(repository_url)
+        try:
+            provider = self.git_adapter.detect_provider(repository_url)
+        except Exception as e:
+            raise ValueError(f"Invalid repository URL: {str(e)}") from e
         
         # Create repository entity
         repository_id = str(uuid.uuid4())

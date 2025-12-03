@@ -56,16 +56,46 @@ class ExecuteRepositoryMigrationUseCase:
             repository_id: Repository identifier
             mar: Migration Assessment Report
             services_to_migrate: Optional list of specific services to migrate
+            run_tests: Whether to run tests after migration
             
         Returns:
             Dict with migration results
+            
+        Raises:
+            ValueError: If repository_id or mar is invalid
         """
+        # Input validation
+        if not repository_id or not isinstance(repository_id, str):
+            raise ValueError("repository_id must be a non-empty string")
+        
+        if mar is None:
+            raise ValueError("mar (MigrationAssessmentReport) is required")
+        
+        if services_to_migrate is not None:
+            if not isinstance(services_to_migrate, list):
+                raise ValueError("services_to_migrate must be a list or None")
+            if not all(isinstance(s, str) for s in services_to_migrate):
+                raise ValueError("All items in services_to_migrate must be strings")
+        
         # Load repository
         repository = self.repository_repo.load(repository_id)
-        if not repository or not repository.local_path:
+        if not repository:
             return {
                 'success': False,
-                'error': 'Repository not found or not cloned'
+                'error': f'Repository {repository_id} not found'
+            }
+        
+        if not repository.local_path:
+            return {
+                'success': False,
+                'error': 'Repository not cloned. Please run analysis first.'
+            }
+        
+        # Validate local path exists
+        if not os.path.exists(repository.local_path):
+            return {
+                'success': False,
+                'error': f'Repository local path does not exist: {repository.local_path}'
             }
         
         # Update status
@@ -117,9 +147,22 @@ class ExecuteRepositoryMigrationUseCase:
                     continue
                 
                 try:
-                    # Read file
-                    with open(full_path, 'r', encoding='utf-8') as f:
-                        original_content = f.read()
+                    # Read file with error handling
+                    try:
+                        with open(full_path, 'r', encoding='utf-8') as f:
+                            original_content = f.read()
+                    except UnicodeDecodeError:
+                        # Try with different encoding
+                        try:
+                            with open(full_path, 'r', encoding='latin-1') as f:
+                                original_content = f.read()
+                        except Exception as e:
+                            raise IOError(f"Could not read file {file_path} with any encoding: {str(e)}")
+                    except Exception as e:
+                        raise IOError(f"Error reading file {file_path}: {str(e)}")
+                    
+                    if not isinstance(original_content, str):
+                        raise TypeError(f"File content must be a string, got {type(original_content)}")
                     
                     print(f"Read {len(original_content)} characters from {file_path}")
                     
@@ -228,12 +271,41 @@ class ExecuteRepositoryMigrationUseCase:
                     if language == 'python' and hasattr(self.refactoring_service.ast_engine, '_aggressive_aws_cleanup'):
                         refactored_content = self.refactoring_service.ast_engine._aggressive_aws_cleanup(refactored_content)
                     
+                    # Validate refactored content before writing
+                    if not isinstance(refactored_content, str):
+                        raise TypeError(
+                            f"Refactored content must be a string, got {type(refactored_content)}. "
+                            f"Value preview: {str(refactored_content)[:200]}"
+                        )
+                    
                     # Write refactored content if changed
                     if refactored_content != original_content:
-                        with open(full_path, 'w', encoding='utf-8') as f:
-                            f.write(refactored_content)
-                        files_changed.append(file_path)
-                        print(f"✅ Successfully refactored: {file_path}")
+                        try:
+                            # Create backup before writing
+                            backup_path = full_path + '.backup'
+                            import shutil
+                            shutil.copy2(full_path, backup_path)
+                            
+                            with open(full_path, 'w', encoding='utf-8') as f:
+                                f.write(refactored_content)
+                            
+                            # Verify write succeeded
+                            with open(full_path, 'r', encoding='utf-8') as f:
+                                written_content = f.read()
+                            if written_content != refactored_content:
+                                # Restore backup if write failed
+                                shutil.copy2(backup_path, full_path)
+                                raise IOError(f"Write verification failed for {file_path}")
+                            
+                            files_changed.append(file_path)
+                            print(f"✅ Successfully refactored: {file_path}")
+                        except Exception as write_error:
+                            # Restore backup if available
+                            backup_path = full_path + '.backup'
+                            if os.path.exists(backup_path):
+                                import shutil
+                                shutil.copy2(backup_path, full_path)
+                            raise IOError(f"Failed to write refactored content to {file_path}: {str(write_error)}")
                     else:
                         print(f"⚠️  No changes detected for: {file_path} (content unchanged)")
                         # Still count as changed if services were applied (even if content didn't change)

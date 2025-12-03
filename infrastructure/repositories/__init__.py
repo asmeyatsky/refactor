@@ -37,6 +37,10 @@ class FileRepositoryAdapter(FileRepositoryPort):
 
     def write_file(self, file_path: str, content: str) -> None:
         """Write content to a file"""
+        # Ensure parent directory exists
+        from pathlib import Path
+        Path(file_path).parent.mkdir(parents=True, exist_ok=True)
+        
         with open(file_path, 'w', encoding='utf-8') as file:
             file.write(content)
 

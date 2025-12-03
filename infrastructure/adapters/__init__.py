@@ -149,10 +149,13 @@ class LLMProviderAdapter(LLMProviderPort):
     
     def _init_provider(self):
         """Initialize the Gemini LLM provider with tool support"""
-        if self.provider == "gemini" and config.GEMINI_API_KEY:
+        # Safely get GEMINI_API_KEY with fallback
+        gemini_api_key = getattr(config, 'GEMINI_API_KEY', None) or os.getenv('GEMINI_API_KEY')
+        
+        if self.provider == "gemini" and gemini_api_key:
             try:
                 import google.generativeai as genai
-                genai.configure(api_key=config.GEMINI_API_KEY)
+                genai.configure(api_key=gemini_api_key)
                 # Use gemini-2.5-flash for fast, cost-effective responses with tool support
                 # Alternative: models/gemini-pro-latest or models/gemini-2.5-pro for better quality
                 self.client = genai.GenerativeModel(
@@ -169,7 +172,7 @@ class LLMProviderAdapter(LLMProviderPort):
                 self.provider_type = "mock"
         else:
             self.provider_type = "mock"
-            if not config.GEMINI_API_KEY:
+            if not gemini_api_key:
                 logger.info("Using mock LLM provider (set GEMINI_API_KEY to use Gemini)")
             else:
                 logger.info("Using mock LLM provider (set LLM_PROVIDER=gemini to use Gemini)")
@@ -853,13 +856,18 @@ class ASTTransformationAdapter(ASTTransformationPort):
                 transformed_tree = transformer.visit(tree)
                 
                 # Convert AST back to code
-                import astor
-                transformed_content = astor.to_source(transformed_tree)
-                
-                # Add transformation comment
-                transformed_content = f"# TRANSFORMED BY CLOUD REFACTOR AGENT\n{transformed_content}"
-                
-                return transformed_content
+                try:
+                    import astor
+                    transformed_content = astor.to_source(transformed_tree)
+                    
+                    # Add transformation comment
+                    transformed_content = f"# TRANSFORMED BY CLOUD REFACTOR AGENT\n{transformed_content}"
+                    
+                    return transformed_content
+                except ImportError:
+                    # If astor is not installed, fall back to regex
+                    logger.warning(f"astor not installed for {file_path}, using regex fallback")
+                    return self._apply_regex_transformations(original_content)
             except SyntaxError:
                 # If AST parsing fails, fall back to regex-based transformation
                 logger.warning(f"AST parsing failed for {file_path}, using regex fallback")

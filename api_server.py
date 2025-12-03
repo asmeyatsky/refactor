@@ -178,6 +178,16 @@ def get_supported_services():
 @app.post("/api/migrate", response_model=MigrateResponse)
 async def migrate_code(request: MigrateRequest, background_tasks: BackgroundTasks):
     """Initiate a code migration process"""
+    # Input validation
+    if not request.code or not isinstance(request.code, str) or not request.code.strip():
+        raise HTTPException(status_code=400, detail="Code is required and must be a non-empty string")
+    
+    if len(request.code) > 10_000_000:  # 10MB limit
+        raise HTTPException(status_code=400, detail="Code exceeds maximum size of 10MB")
+    
+    if not request.language or not isinstance(request.language, str):
+        raise HTTPException(status_code=400, detail="Language is required")
+    
     # Check if GEMINI_API_KEY is set (required for LLM transformations)
     gemini_key = os.getenv("GEMINI_API_KEY")
     if not gemini_key:
@@ -190,11 +200,15 @@ async def migrate_code(request: MigrateRequest, background_tasks: BackgroundTask
     
     # Validate input
     supported_languages = ["python", "java", "csharp", "c#", "javascript", "js", "nodejs", "node", "go", "golang"]
-    if request.language not in supported_languages:
+    if request.language.lower() not in supported_languages:
         raise HTTPException(status_code=400, detail=f"Unsupported language. Supported: {', '.join(supported_languages)}")
     
-    if not request.services:
+    if not request.services or not isinstance(request.services, list) or len(request.services) == 0:
         raise HTTPException(status_code=400, detail="At least one service must be selected")
+    
+    # Validate services are strings
+    if not all(isinstance(s, str) and s.strip() for s in request.services):
+        raise HTTPException(status_code=400, detail="All services must be non-empty strings")
     
     # Create a temporary file with the provided code
     with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as temp_file:

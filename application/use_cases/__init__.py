@@ -297,6 +297,12 @@ class ExecuteMultiServiceRefactoringPlanUseCase:
                             codebase, task, service_type, transformed_content
                         )
                         
+                        # Check if transformation failed (error string returned)
+                        if isinstance(transformed_content, str) and transformed_content.strip().startswith("# ERROR"):
+                            # Transformation failed - raise exception to be caught by outer handler
+                            error_msg = transformed_content.split("\n")[0].replace("# ERROR during transformation: ", "")
+                            raise Exception(error_msg)
+                        
                         # Collect variable mapping for summary
                         if variable_mapping and isinstance(variable_mapping, dict):
                             all_variable_mappings.update(variable_mapping)

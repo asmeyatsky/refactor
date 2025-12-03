@@ -1,0 +1,538 @@
+✓ Loaded tests.application.test_use_cases_comprehensive
+✓ Loaded tests.application.test_use_cases
+✓ Loaded tests.domain.test_domain_entities_comprehensive
+✓ Loaded tests.domain.test_domain_entities
+✓ Loaded tests.infrastructure.test_adapters_comprehensive
+✓ Loaded tests.infrastructure.test_adapters_repositories
+⚠ Test discovery warning: Start directory is not importable: '/Users/allansmeyatsky/refactor/tests'
+test_execute_codebase_not_found (tests.application.test_use_cases_comprehensive.TestAnalyzeCodebaseUseCaseComprehensive.test_execute_codebase_not_found)
+Test execution when codebase is not found ... ok
+test_execute_success_with_aws_services (tests.application.test_use_cases_comprehensive.TestAnalyzeCodebaseUseCaseComprehensive.test_execute_success_with_aws_services)
+Test successful execution with AWS services detected ... ok
+test_execute_success_with_azure_services (tests.application.test_use_cases_comprehensive.TestAnalyzeCodebaseUseCaseComprehensive.test_execute_success_with_azure_services)
+Test successful execution with Azure services detected ... ok
+test_execute_validates_codebase_id (tests.application.test_use_cases_comprehensive.TestAnalyzeCodebaseUseCaseComprehensive.test_execute_validates_codebase_id)
+Test that codebase_id validation works ... ok
+test_execute_with_empty_files_list (tests.application.test_use_cases_comprehensive.TestAnalyzeCodebaseUseCaseComprehensive.test_execute_with_empty_files_list)
+Test execution with empty files list ... ok
+test_execute_with_file_read_error (tests.application.test_use_cases_comprehensive.TestAnalyzeCodebaseUseCaseComprehensive.test_execute_with_file_read_error)
+Test execution when file read fails ... ok
+test_execute_with_multiple_languages (tests.application.test_use_cases_comprehensive.TestAnalyzeCodebaseUseCaseComprehensive.test_execute_with_multiple_languages)
+Test execution with codebase containing multiple language files ... ok
+test_execute_codebase_not_found (tests.application.test_use_cases_comprehensive.TestCreateMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_codebase_not_found)
+Test execution when codebase is not found ... ok
+test_execute_creates_unique_task_ids (tests.application.test_use_cases_comprehensive.TestCreateMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_creates_unique_task_ids)
+Test that task IDs are unique ... ok
+test_execute_handles_file_read_errors (tests.application.test_use_cases_comprehensive.TestCreateMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_handles_file_read_errors)
+Test execution handles file read errors gracefully ... ok
+test_execute_success_auto_detect_services (tests.application.test_use_cases_comprehensive.TestCreateMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_success_auto_detect_services)
+Test successful creation with auto-detected services ... ok
+test_execute_success_with_specific_services (tests.application.test_use_cases_comprehensive.TestCreateMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_success_with_specific_services)
+Test successful creation with specific services ... ok
+test_execute_with_empty_services_list (tests.application.test_use_cases_comprehensive.TestCreateMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_empty_services_list)
+Test execution with empty services list ... ok
+test_execute_with_no_files_found (tests.application.test_use_cases_comprehensive.TestCreateMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_no_files_found)
+Test execution when no files match services ... ok
+test_execute_codebase_not_found (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_codebase_not_found)
+Test execution when codebase is not found ... ok
+test_execute_collects_variable_mappings (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_collects_variable_mappings)
+Test that variable mappings are collected from all tasks ... ok
+test_execute_groups_tasks_by_file (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_groups_tasks_by_file)
+Test that tasks are grouped by file for efficiency ... ok
+test_execute_plan_not_found (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_plan_not_found)
+Test execution when plan is not found ... ok
+test_execute_success (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_success)
+Test successful execution of refactoring plan ... ok
+test_execute_with_file_read_error (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_file_read_error)
+Test execution when file read fails ... ok
+test_execute_with_no_op_task (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_no_op_task)
+Test execution with no-op tasks ... ok
+test_execute_with_task_failure (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_task_failure)
+Test execution when a task fails ... FAIL
+test_execute_with_test_failure (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_test_failure)
+Test execution when tests fail ... ok
+test_execute_filters_file_extensions (tests.application.test_use_cases_comprehensive.TestInitializeCodebaseUseCaseComprehensive.test_execute_filters_file_extensions)
+Test that only relevant file extensions are included ... ok
+test_execute_handles_nested_directories (tests.application.test_use_cases_comprehensive.TestInitializeCodebaseUseCaseComprehensive.test_execute_handles_nested_directories)
+Test execution with nested directory structure ... ok
+test_execute_path_not_exists (tests.application.test_use_cases_comprehensive.TestInitializeCodebaseUseCaseComprehensive.test_execute_path_not_exists)
+Test execution when path doesn't exist ... ok
+test_execute_success (tests.application.test_use_cases_comprehensive.TestInitializeCodebaseUseCaseComprehensive.test_execute_success)
+Test successful initialization ... ok
+test_execute_validates_language (tests.application.test_use_cases_comprehensive.TestInitializeCodebaseUseCaseComprehensive.test_execute_validates_language)
+Test that language validation works ... ok
+test_execute_with_no_files (tests.application.test_use_cases_comprehensive.TestInitializeCodebaseUseCaseComprehensive.test_execute_with_no_files)
+Test execution with directory containing no relevant files ... ok
+test_execute_codebase_not_found (tests.application.test_use_cases.TestAnalyzeCodebaseUseCase.test_execute_codebase_not_found)
+Test execution when codebase is not found ... ok
+test_execute_success (tests.application.test_use_cases.TestAnalyzeCodebaseUseCase.test_execute_success)
+Test successful execution of analyze codebase use case ... ok
+test_execute_codebase_not_found (tests.application.test_use_cases.TestCreateRefactoringPlanUseCase.test_execute_codebase_not_found)
+Test execution when codebase is not found ... ok
+test_execute_success (tests.application.test_use_cases.TestCreateRefactoringPlanUseCase.test_execute_success)
+Test successful creation of refactoring plan ... ok
+test_execute_plan_not_found (tests.application.test_use_cases.TestExecuteRefactoringPlanUseCase.test_execute_plan_not_found)
+Test execution when plan is not found ... ok
+test_execute_success (tests.application.test_use_cases.TestExecuteRefactoringPlanUseCase.test_execute_success)
+Test successful execution of refactoring plan ... ok
+test_execute_path_not_exists (tests.application.test_use_cases.TestInitializeCodebaseUseCase.test_execute_path_not_exists)
+Test execution when path doesn't exist ... ok
+test_execute_success (tests.application.test_use_cases.TestInitializeCodebaseUseCase.test_execute_success)
+Test successful initialization of codebase ... ok
+test_codebase_creation_minimal_fields (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_codebase_creation_minimal_fields)
+Test creating codebase with minimal required fields ... ok
+test_codebase_creation_with_all_fields (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_codebase_creation_with_all_fields)
+Test creating codebase with all fields ... ok
+test_codebase_immutability (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_codebase_immutability)
+Test that Codebase is immutable (frozen dataclass) ... ok
+test_codebase_update_file_creates_new_instance (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_codebase_update_file_creates_new_instance)
+Test that update_file creates a new codebase instance ... ok
+test_codebase_with_different_languages (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_codebase_with_different_languages)
+Test codebase creation with different programming languages ... ok
+test_get_aws_s3_files_case_insensitive (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_get_aws_s3_files_case_insensitive)
+Test get_aws_s3_files is case insensitive ... ok
+test_get_aws_s3_files_with_aws_in_filename (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_get_aws_s3_files_with_aws_in_filename)
+Test get_aws_s3_files finds files with 'aws' in filename ... ok
+test_get_aws_s3_files_with_empty_list (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_get_aws_s3_files_with_empty_list)
+Test get_aws_s3_files with empty files list ... ok
+test_get_aws_s3_files_with_s3_in_filename (tests.domain.test_domain_entities_comprehensive.TestCodebaseComprehensive.test_get_aws_s3_files_with_s3_in_filename)
+Test get_aws_s3_files finds files with 's3' in filename ... ok
+test_create_refactoring_plan_success (tests.domain.test_domain_entities_comprehensive.TestRefactoringDomainServiceComprehensive.test_create_refactoring_plan_success)
+Test creating a refactoring plan successfully ... ok
+test_create_refactoring_plan_validates_codebase (tests.domain.test_domain_entities_comprehensive.TestRefactoringDomainServiceComprehensive.test_create_refactoring_plan_validates_codebase)
+Test that plan creation validates codebase ... ok
+test_create_refactoring_plan_with_no_s3_files (tests.domain.test_domain_entities_comprehensive.TestRefactoringDomainServiceComprehensive.test_create_refactoring_plan_with_no_s3_files)
+Test creating plan when no S3 files found ... ok
+test_get_completed_tasks (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_get_completed_tasks)
+Test get_completed_tasks returns only completed tasks ... ok
+test_get_failed_tasks (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_get_failed_tasks)
+Test get_failed_tasks returns only failed tasks ... ok
+test_get_pending_tasks (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_get_pending_tasks)
+Test get_pending_tasks returns only pending tasks ... ok
+test_is_executable_with_failed_tasks (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_is_executable_with_failed_tasks)
+Test is_executable returns False when there are failed tasks ... ok
+test_is_executable_with_no_failed_tasks (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_is_executable_with_no_failed_tasks)
+Test is_executable returns True when no failed tasks ... ok
+test_mark_task_completed (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_mark_task_completed)
+Test marking a task as completed ... ok
+test_mark_task_completed_sets_plan_completed_at (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_mark_task_completed_sets_plan_completed_at)
+Test that marking last task completed sets plan completed_at ... ok
+test_mark_task_failed (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_mark_task_failed)
+Test marking a task as failed ... ok
+test_mark_task_in_progress (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_mark_task_in_progress)
+Test marking a task as in progress ... ok
+test_mark_task_in_progress_nonexistent_task (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_mark_task_in_progress_nonexistent_task)
+Test marking non-existent task as in progress ... ok
+test_plan_creation_with_all_fields (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_plan_creation_with_all_fields)
+Test creating plan with all fields ... ok
+test_plan_immutability (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_plan_immutability)
+Test that RefactoringPlan is immutable ... ok
+test_plan_with_empty_tasks (tests.domain.test_domain_entities_comprehensive.TestRefactoringPlanComprehensive.test_plan_with_empty_tasks)
+Test plan creation with empty tasks list ... ok
+test_task_creation_minimal_fields (tests.domain.test_domain_entities_comprehensive.TestRefactoringTaskComprehensive.test_task_creation_minimal_fields)
+Test creating task with minimal fields ... ok
+test_task_creation_with_all_fields (tests.domain.test_domain_entities_comprehensive.TestRefactoringTaskComprehensive.test_task_creation_with_all_fields)
+Test creating task with all fields ... ok
+test_task_immutability (tests.domain.test_domain_entities_comprehensive.TestRefactoringTaskComprehensive.test_task_immutability)
+Test that RefactoringTask is immutable ... ok
+test_task_with_completed_status (tests.domain.test_domain_entities_comprehensive.TestRefactoringTaskComprehensive.test_task_with_completed_status)
+Test task with completed status ... ok
+test_task_with_failed_status (tests.domain.test_domain_entities_comprehensive.TestRefactoringTaskComprehensive.test_task_with_failed_status)
+Test task with failed status and error ... ok
+test_codebase_creation (tests.domain.test_domain_entities.TestCodebase.test_codebase_creation)
+Test that Codebase entity can be created with valid parameters ... ok
+test_codebase_immutable (tests.domain.test_domain_entities.TestCodebase.test_codebase_immutable)
+Test that Codebase is immutable ... ok
+test_get_aws_s3_files (tests.domain.test_domain_entities.TestCodebase.test_get_aws_s3_files)
+Test that get_aws_s3_files works correctly ... ok
+test_create_refactoring_plan (tests.domain.test_domain_entities.TestRefactoringDomainService.test_create_refactoring_plan)
+Test creating a refactoring plan ... ok
+test_get_completed_tasks (tests.domain.test_domain_entities.TestRefactoringPlan.test_get_completed_tasks)
+Test that get_completed_tasks returns only completed tasks ... ok
+test_get_pending_tasks (tests.domain.test_domain_entities.TestRefactoringPlan.test_get_pending_tasks)
+Test that get_pending_tasks returns only pending tasks ... ok
+test_mark_task_completed (tests.domain.test_domain_entities.TestRefactoringPlan.test_mark_task_completed)
+Test marking a task as completed ... ok
+test_mark_task_failed (tests.domain.test_domain_entities.TestRefactoringPlan.test_mark_task_failed)
+Test marking a task as failed ... ok
+test_mark_task_in_progress (tests.domain.test_domain_entities.TestRefactoringPlan.test_mark_task_in_progress)
+Test marking a task as in progress ... ok
+test_plan_creation (tests.domain.test_domain_entities.TestRefactoringPlan.test_plan_creation)
+Test that RefactoringPlan can be created with valid parameters ... ok
+test_plan_executable_when_no_failed_tasks (tests.domain.test_domain_entities.TestRefactoringPlan.test_plan_executable_when_no_failed_tasks)
+Test that plan is executable when no tasks are failed ... ok
+test_plan_not_executable_when_has_failed_tasks (tests.domain.test_domain_entities.TestRefactoringPlan.test_plan_not_executable_when_has_failed_tasks)
+Test that plan is not executable when it has failed tasks ... ok
+test_apply_recipe_file_not_exists (tests.infrastructure.test_adapters_comprehensive.TestASTTransformationAdapterComprehensive.test_apply_recipe_file_not_exists)
+Test applying recipe when file doesn't exist ... ERROR:infrastructure.adapters:Error transforming /nonexistent/file.py: [Errno 2] No such file or directory: '/nonexistent/file.py'
+ok
+test_apply_recipe_success (tests.infrastructure.test_adapters_comprehensive.TestASTTransformationAdapterComprehensive.test_apply_recipe_success)
+Test applying recipe successfully ... ERROR:infrastructure.adapters:Error transforming /var/folders/42/wlc10gvs02l9hc9f_n64gnm40000gn/T/tmp_6_cv7e9.py: No module named 'astor'
+ok
+test_apply_recipe_with_invalid_syntax (tests.infrastructure.test_adapters_comprehensive.TestASTTransformationAdapterComprehensive.test_apply_recipe_with_invalid_syntax)
+Test applying recipe to file with invalid syntax ... WARNING:infrastructure.adapters:AST parsing failed for /var/folders/42/wlc10gvs02l9hc9f_n64gnm40000gn/T/tmpx2e7zdps.py, using regex fallback
+ok
+test_analyze_dependencies_no_requirements_file (tests.infrastructure.test_adapters_comprehensive.TestCodeAnalyzerAdapterComprehensive.test_analyze_dependencies_no_requirements_file)
+Test analyzing dependencies when requirements.txt doesn't exist ... ok
+test_analyze_dependencies_python (tests.infrastructure.test_adapters_comprehensive.TestCodeAnalyzerAdapterComprehensive.test_analyze_dependencies_python)
+Test analyzing Python dependencies ... ok
+test_identify_aws_s3_usage_no_s3 (tests.infrastructure.test_adapters_comprehensive.TestCodeAnalyzerAdapterComprehensive.test_identify_aws_s3_usage_no_s3)
+Test identifying S3 usage when none exists ... ok
+test_identify_aws_s3_usage_python (tests.infrastructure.test_adapters_comprehensive.TestCodeAnalyzerAdapterComprehensive.test_identify_aws_s3_usage_python)
+Test identifying AWS S3 usage in Python files ... ok
+test_load_nonexistent_codebase (tests.infrastructure.test_adapters_comprehensive.TestCodebaseRepositoryAdapterComprehensive.test_load_nonexistent_codebase)
+Test loading non-existent codebase ... ok
+test_save_and_load_success (tests.infrastructure.test_adapters_comprehensive.TestCodebaseRepositoryAdapterComprehensive.test_save_and_load_success)
+Test saving and loading codebase successfully ... ok
+test_save_overwrites_existing (tests.infrastructure.test_adapters_comprehensive.TestCodebaseRepositoryAdapterComprehensive.test_save_overwrites_existing)
+Test that save overwrites existing codebase ... ok
+test_save_with_complex_metadata (tests.infrastructure.test_adapters_comprehensive.TestCodebaseRepositoryAdapterComprehensive.test_save_with_complex_metadata)
+Test saving codebase with complex metadata ... ok
+test_create_backup_file_not_exists (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_create_backup_file_not_exists)
+Test creating backup when file doesn't exist ... ok
+test_create_backup_success (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_create_backup_success)
+Test creating a backup successfully ... ok
+test_write_file_creates_directory (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_creates_directory)
+Test that write_file creates directory if it doesn't exist ... ERROR
+test_write_file_success (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_success)
+Test writing file successfully ... ok
+test_write_file_with_empty_content (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_with_empty_content)
+Test writing file with empty content ... ok
+test_write_file_with_special_characters (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_with_special_characters)
+Test writing file with special characters ... FAIL
+test_generate_recipe_success (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_recipe_success)
+Test generating recipe successfully ... ERROR
+test_generate_recipe_with_empty_analysis (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_recipe_with_empty_analysis)
+Test generating recipe with empty analysis ... ERROR
+test_generate_refactoring_intent_success (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_refactoring_intent_success)
+Test generating refactoring intent successfully ... ERROR
+test_generate_refactoring_intent_with_nonexistent_file (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_refactoring_intent_with_nonexistent_file)
+Test generating intent with non-existent file ... ERROR
+test_load_nonexistent_plan (tests.infrastructure.test_adapters_comprehensive.TestPlanRepositoryAdapterComprehensive.test_load_nonexistent_plan)
+Test loading non-existent plan ... ok
+test_save_and_load_success (tests.infrastructure.test_adapters_comprehensive.TestPlanRepositoryAdapterComprehensive.test_save_and_load_success)
+Test saving and loading plan successfully ... ok
+test_save_plan_with_multiple_tasks (tests.infrastructure.test_adapters_comprehensive.TestPlanRepositoryAdapterComprehensive.test_save_plan_with_multiple_tasks)
+Test saving plan with multiple tasks ... ok
+test_run_tests_returns_consistent_structure (tests.infrastructure.test_adapters_comprehensive.TestTestRunnerAdapterComprehensive.test_run_tests_returns_consistent_structure)
+Test that run_tests always returns consistent structure ... WARNING:infrastructure.adapters:pytest not installed, falling back to mock
+INFO:infrastructure.adapters:Using mock test runner
+ok
+test_run_tests_success (tests.infrastructure.test_adapters_comprehensive.TestTestRunnerAdapterComprehensive.test_run_tests_success)
+Test running tests successfully ... WARNING:infrastructure.adapters:pytest not installed, falling back to mock
+INFO:infrastructure.adapters:Using mock test runner
+ok
+test_run_tests_with_no_test_files (tests.infrastructure.test_adapters_comprehensive.TestTestRunnerAdapterComprehensive.test_run_tests_with_no_test_files)
+Test running tests when no test files exist ... WARNING:infrastructure.adapters:pytest not installed, falling back to mock
+INFO:infrastructure.adapters:Using mock test runner
+ok
+test_apply_recipe (tests.infrastructure.test_adapters_repositories.TestASTTransformationAdapter.test_apply_recipe)
+Test applying a recipe to transform code ... ERROR:infrastructure.adapters:Error transforming /var/folders/42/wlc10gvs02l9hc9f_n64gnm40000gn/T/tmp0_9esdcq.py: No module named 'astor'
+FAIL
+test_analyze_dependencies_python (tests.infrastructure.test_adapters_repositories.TestCodeAnalyzerAdapter.test_analyze_dependencies_python)
+Test analyzing Python dependencies ... ok
+test_identify_aws_s3_usage_python (tests.infrastructure.test_adapters_repositories.TestCodeAnalyzerAdapter.test_identify_aws_s3_usage_python)
+Test identifying AWS S3 usage in Python files ... ok
+test_save_and_load (tests.infrastructure.test_adapters_repositories.TestCodebaseRepositoryAdapter.test_save_and_load)
+Test saving and loading a codebase ... ok
+test_create_backup (tests.infrastructure.test_adapters_repositories.TestFileRepositoryAdapter.test_create_backup)
+Test creating a backup of a file ... ok
+test_generate_recipe (tests.infrastructure.test_adapters_repositories.TestLLMProviderAdapter.test_generate_recipe)
+Test generating recipe ... ERROR
+test_generate_refactoring_intent (tests.infrastructure.test_adapters_repositories.TestLLMProviderAdapter.test_generate_refactoring_intent)
+Test generating refactoring intent ... ERROR
+test_save_and_load (tests.infrastructure.test_adapters_repositories.TestPlanRepositoryAdapter.test_save_and_load)
+Test saving and loading a refactoring plan ... ok
+test_run_tests (tests.infrastructure.test_adapters_repositories.TestTestRunnerAdapter.test_run_tests)
+Test running tests ... WARNING:infrastructure.adapters:pytest not installed, falling back to mock
+INFO:infrastructure.adapters:Using mock test runner
+ok
+
+======================================================================
+ERROR: test_write_file_creates_directory (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_creates_directory)
+Test that write_file creates directory if it doesn't exist
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 72, in test_write_file_creates_directory
+    self.adapter.write_file(test_file, content)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/repositories/__init__.py", line 40, in write_file
+    with open(file_path, 'w', encoding='utf-8') as file:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/var/folders/42/wlc10gvs02l9hc9f_n64gnm40000gn/T/tmpb_v3_ly3/subdir/test.txt'
+
+======================================================================
+ERROR: test_generate_recipe_success (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_recipe_success)
+Test generating recipe successfully
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+======================================================================
+ERROR: test_generate_recipe_with_empty_analysis (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_recipe_with_empty_analysis)
+Test generating recipe with empty analysis
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+======================================================================
+ERROR: test_generate_refactoring_intent_success (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_refactoring_intent_success)
+Test generating refactoring intent successfully
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+======================================================================
+ERROR: test_generate_refactoring_intent_with_nonexistent_file (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_refactoring_intent_with_nonexistent_file)
+Test generating intent with non-existent file
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+======================================================================
+ERROR: test_generate_recipe (tests.infrastructure.test_adapters_repositories.TestLLMProviderAdapter.test_generate_recipe)
+Test generating recipe
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_repositories.py", line 186, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+======================================================================
+ERROR: test_generate_refactoring_intent (tests.infrastructure.test_adapters_repositories.TestLLMProviderAdapter.test_generate_refactoring_intent)
+Test generating refactoring intent
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_repositories.py", line 186, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+======================================================================
+FAIL: test_execute_with_task_failure (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_task_failure)
+Test execution when a task fails
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/application/test_use_cases_comprehensive.py", line 350, in test_execute_with_task_failure
+    self.assertFalse(result.success)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_write_file_with_special_characters (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_with_special_characters)
+Test writing file with special characters
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 84, in test_write_file_with_special_characters
+    self.assertEqual(f.read(), content)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+AssertionError: 'test\ncontent\twith\nspecial chars: àáâãäå' != 'test\ncontent\twith\rspecial chars: àáâãäå'
+  test
+- content	with
+?        	    ^
++ content	with?        	    ^
+  special chars: àáâãäå
+
+
+======================================================================
+FAIL: test_apply_recipe (tests.infrastructure.test_adapters_repositories.TestASTTransformationAdapter.test_apply_recipe)
+Test applying a recipe to transform code
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_repositories.py", line 244, in test_apply_recipe
+    self.assertIn("TRANSFORMED BY CLOUD REFACTOR AGENT", result)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'TRANSFORMED BY CLOUD REFACTOR AGENT' not found in "\nimport boto3\ns3_client = boto3.client('s3')\ns3_client.upload_file('local_file', 'bucket_name', 's3_key')\n"
+
+----------------------------------------------------------------------
+Ran 115 tests in 0.071s
+
+FAILED (failures=3, errors=7)
+
+======================================================================
+TEST SUMMARY
+======================================================================
+Tests run: 115
+Successes: 105
+Failures: 3
+Errors: 7
+Skipped: 0
+
+FAILURES:
+
+test_execute_with_task_failure (tests.application.test_use_cases_comprehensive.TestExecuteMultiServiceRefactoringPlanUseCaseComprehensive.test_execute_with_task_failure)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/application/test_use_cases_comprehensive.py", line 350, in test_execute_with_task_failure
+    self.assertFalse(result.success)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+
+test_write_file_with_special_characters (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_with_special_characters)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 84, in test_write_file_with_special_characters
+    self.assertEqual(f.read(), content)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+AssertionError: 'test\ncontent\twith\nspecial chars: àáâãäå' != 'test\ncontent\twith\rspecial chars: àáâãäå'
+  test
+- content	with
+?        	    ^
++ content	with?        	    ^
+  special chars: àáâãäå
+
+
+
+test_apply_recipe (tests.infrastructure.test_adapters_repositories.TestASTTransformationAdapter.test_apply_recipe)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_repositories.py", line 244, in test_apply_recipe
+    self.assertIn("TRANSFORMED BY CLOUD REFACTOR AGENT", result)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'TRANSFORMED BY CLOUD REFACTOR AGENT' not found in "\nimport boto3\ns3_client = boto3.client('s3')\ns3_client.upload_file('local_file', 'bucket_name', 's3_key')\n"
+
+
+ERRORS:
+
+test_write_file_creates_directory (tests.infrastructure.test_adapters_comprehensive.TestFileRepositoryAdapterComprehensive.test_write_file_creates_directory)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 72, in test_write_file_creates_directory
+    self.adapter.write_file(test_file, content)
+    ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/repositories/__init__.py", line 40, in write_file
+    with open(file_path, 'w', encoding='utf-8') as file:
+         ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/var/folders/42/wlc10gvs02l9hc9f_n64gnm40000gn/T/tmpb_v3_ly3/subdir/test.txt'
+
+
+test_generate_recipe_success (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_recipe_success)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+
+test_generate_recipe_with_empty_analysis (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_recipe_with_empty_analysis)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+
+test_generate_refactoring_intent_success (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_refactoring_intent_success)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+
+test_generate_refactoring_intent_with_nonexistent_file (tests.infrastructure.test_adapters_comprehensive.TestLLMProviderAdapterComprehensive.test_generate_refactoring_intent_with_nonexistent_file)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_comprehensive.py", line 346, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+
+test_generate_recipe (tests.infrastructure.test_adapters_repositories.TestLLMProviderAdapter.test_generate_recipe)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_repositories.py", line 186, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+
+test_generate_refactoring_intent (tests.infrastructure.test_adapters_repositories.TestLLMProviderAdapter.test_generate_refactoring_intent)
+Traceback (most recent call last):
+  File "/Users/allansmeyatsky/refactor/tests/infrastructure/test_adapters_repositories.py", line 186, in setUp
+    self.adapter = LLMProviderAdapter()
+                   ~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 148, in __init__
+    self._init_provider()
+    ~~~~~~~~~~~~~~~~~~~^^
+  File "/Users/allansmeyatsky/refactor/infrastructure/adapters/__init__.py", line 172, in _init_provider
+    if not config.GEMINI_API_KEY:
+           ^^^^^^^^^^^^^^^^^^^^^
+AttributeError: 'Config' object has no attribute 'GEMINI_API_KEY'
+
+======================================================================
