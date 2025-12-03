@@ -50,18 +50,11 @@ ENV PORT=8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${PORT:-8080}/api/health')" || exit 1
 
-# Run the API server (Cloud Run will set PORT env var)
-# FastAPI requires ASGI, so use uvicorn workers with gunicorn
-# Use --preload to load app before forking workers (faster startup)
-# Use --graceful-timeout for better shutdown handling
-CMD exec gunicorn api_server:app \
-    --bind 0.0.0.0:${PORT:-8080} \
-    --workers 1 \
-    --worker-class uvicorn.workers.UvicornWorker \
-    --timeout 300 \
-    --graceful-timeout 30 \
-    --keep-alive 5 \
-    --access-logfile - \
-    --error-logfile - \
-    --log-level info \
-    --preload
+# Install curl for health check script
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+# Copy startup script
+COPY start_server.sh /app/start_server.sh
+
+# Run the API server with startup script
+CMD ["/app/start_server.sh"]
