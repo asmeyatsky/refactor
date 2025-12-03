@@ -52,4 +52,16 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Run the API server (Cloud Run will set PORT env var)
 # FastAPI requires ASGI, so use uvicorn workers with gunicorn
-CMD exec gunicorn api_server:app --bind 0.0.0.0:${PORT:-8080} --workers 1 --worker-class uvicorn.workers.UvicornWorker --timeout 300 --access-logfile - --error-logfile - --log-level info
+# Use --preload to load app before forking workers (faster startup)
+# Use --graceful-timeout for better shutdown handling
+CMD exec gunicorn api_server:app \
+    --bind 0.0.0.0:${PORT:-8080} \
+    --workers 1 \
+    --worker-class uvicorn.workers.UvicornWorker \
+    --timeout 300 \
+    --graceful-timeout 30 \
+    --keep-alive 5 \
+    --access-logfile - \
+    --error-logfile - \
+    --log-level info \
+    --preload
