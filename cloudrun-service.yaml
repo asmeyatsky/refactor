@@ -35,6 +35,14 @@ spec:
           value: "refactord-479213"
         - name: GCP_REGION
           value: "asia-south1"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: TEST_RUNNER
+          value: "pytest"
+        - name: ALLOWED_ORIGINS
+          value: "https://cloud-refactor-agent-*.run.app,https://*.run.app"
         resources:
           limits:
             cpu: "2"

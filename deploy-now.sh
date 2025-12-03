@@ -24,7 +24,8 @@ echo -e "Service: ${GREEN}${SERVICE_NAME}${NC}"
 echo ""
 
 # Default API key (can be overridden with environment variable)
-GEMINI_API_KEY="${GEMINI_API_KEY:-AIzaSyBLmUFQun8hK6kaljk32ml9rt7yV3UvBSA}"
+# Note: Set GEMINI_API_KEY environment variable before running this script
+GEMINI_API_KEY="${GEMINI_API_KEY:-}"
 
 # Check if gcloud is installed
 if ! command -v gcloud &> /dev/null; then
@@ -41,45 +42,65 @@ if ! command -v docker &> /dev/null; then
 fi
 
 # Set the project
-echo -e "${YELLOW}[1/6] Setting GCP project...${NC}"
+echo -e "${YELLOW}[1/7] Setting GCP project...${NC}"
 gcloud config set project ${GCP_PROJECT_ID}
 
+# Check if frontend is built
+echo -e "${YELLOW}[1.5/7] Checking frontend build...${NC}"
+if [ ! -d "frontend/build" ]; then
+    echo -e "${YELLOW}Frontend build not found. Building frontend...${NC}"
+    if ! command -v npm &> /dev/null; then
+        echo -e "${RED}Error: npm is not installed. Please install Node.js and npm${NC}"
+        exit 1
+    fi
+    cd frontend
+    npm install
+    npm run build
+    cd ..
+    echo -e "${GREEN}✅ Frontend built successfully${NC}"
+else
+    echo -e "${GREEN}✅ Frontend build found${NC}"
+fi
+
 # Enable required APIs
-echo -e "${YELLOW}[2/6] Enabling required APIs...${NC}"
+echo -e "${YELLOW}[2/7] Enabling required APIs...${NC}"
 gcloud services enable cloudbuild.googleapis.com --quiet || true
 gcloud services enable run.googleapis.com --quiet || true
 gcloud services enable containerregistry.googleapis.com --quiet || true
 gcloud services enable secretmanager.googleapis.com --quiet || true
 
 # Build the Docker image
-echo -e "${YELLOW}[3/6] Building Docker image...${NC}"
+echo -e "${YELLOW}[3/7] Building Docker image...${NC}"
 IMAGE_NAME="gcr.io/${GCP_PROJECT_ID}/${SERVICE_NAME}"
 docker build -f Dockerfile.cloudrun -t ${IMAGE_NAME}:latest .
 
 # Push the image to Container Registry
-echo -e "${YELLOW}[4/6] Pushing image to Container Registry...${NC}"
+echo -e "${YELLOW}[4/7] Pushing image to Container Registry...${NC}"
 docker push ${IMAGE_NAME}:latest
 
 # Prepare environment variables
-ENV_VARS="REQUIRE_AUTH=true,ALLOWED_EMAIL_DOMAINS=@searce.com,GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_REGION=${GCP_REGION}"
+ENV_VARS="REQUIRE_AUTH=true,ALLOWED_EMAIL_DOMAINS=@searce.com,GCP_PROJECT_ID=${GCP_PROJECT_ID},GCP_REGION=${GCP_REGION},PYTHONUNBUFFERED=1,LOG_LEVEL=INFO,TEST_RUNNER=pytest"
 if [ ! -z "$GEMINI_API_KEY" ]; then
     ENV_VARS="${ENV_VARS},GEMINI_API_KEY=${GEMINI_API_KEY}"
+else
+    echo -e "${YELLOW}⚠️  Warning: GEMINI_API_KEY not set. LLM features will use mock provider.${NC}"
 fi
 
 # Deploy to Cloud Run
-echo -e "${YELLOW}[5/6] Deploying to Cloud Run...${NC}"
+echo -e "${YELLOW}[5/7] Deploying to Cloud Run...${NC}"
 gcloud run deploy ${SERVICE_NAME} \
     --image ${IMAGE_NAME}:latest \
     --platform managed \
     --region ${GCP_REGION} \
-    --allow-unauthenticated=false \
+    --no-allow-unauthenticated \
     --memory 2Gi \
     --cpu 2 \
     --timeout 300 \
     --max-instances 10 \
     --min-instances 1 \
     --set-env-vars "${ENV_VARS}" \
-    --service-account cloud-refactor-agent@${GCP_PROJECT_ID}.iam.gserviceaccount.com || {
+    --service-account cloud-refactor-agent@${GCP_PROJECT_ID}.iam.gserviceaccount.com \
+    --execution-environment gen2 || {
     echo -e "${YELLOW}Service account doesn't exist, creating it...${NC}"
     gcloud iam service-accounts create cloud-refactor-agent \
         --display-name="Cloud Refactor Agent Service Account" \
@@ -90,14 +111,15 @@ gcloud run deploy ${SERVICE_NAME} \
         --image ${IMAGE_NAME}:latest \
         --platform managed \
         --region ${GCP_REGION} \
-        --allow-unauthenticated=false \
+        --no-allow-unauthenticated \
         --memory 2Gi \
         --cpu 2 \
         --timeout 300 \
         --max-instances 10 \
         --min-instances 1 \
         --set-env-vars "${ENV_VARS}" \
-        --service-account cloud-refactor-agent@${GCP_PROJECT_ID}.iam.gserviceaccount.com
+        --service-account cloud-refactor-agent@${GCP_PROJECT_ID}.iam.gserviceaccount.com \
+        --execution-environment gen2
 }
 
 # Get the service URL
@@ -112,7 +134,7 @@ echo -e "Service URL: ${BLUE}${SERVICE_URL}${NC}"
 echo ""
 
 # Configure IAM for Searce users
-echo -e "${YELLOW}[6/6] Configuring IAM for Searce users...${NC}"
+echo -e "${YELLOW}[6/7] Configuring IAM for Searce users...${NC}"
 gcloud run services add-iam-policy-binding ${SERVICE_NAME} \
     --region ${GCP_REGION} \
     --member "domain:searce.com" \
