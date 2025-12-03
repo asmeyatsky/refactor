@@ -100,7 +100,8 @@ gcloud run deploy ${SERVICE_NAME} \
     --min-instances 1 \
     --set-env-vars "${ENV_VARS}" \
     --service-account cloud-refactor-agent@${GCP_PROJECT_ID}.iam.gserviceaccount.com \
-    --execution-environment gen2 || {
+    --execution-environment gen2 \
+    --cpu-boost || {
     echo -e "${YELLOW}Service account doesn't exist, creating it...${NC}"
     gcloud iam service-accounts create cloud-refactor-agent \
         --display-name="Cloud Refactor Agent Service Account" \
