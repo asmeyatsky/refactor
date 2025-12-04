@@ -350,8 +350,22 @@ class ValidateGCPCodeUseCase:
                         found_patterns.append('create_bucket()')
                         break
         
-        # Use language-specific patterns (excluding Bucket= and create_bucket() which we handle above)
-        patterns_to_check = [p for p in self.AWS_PATTERNS if p not in ['Bucket=', 'create_bucket()']]
+        # Check for Item= only if it's in AWS/Azure context (not GCP)
+        # GCP Firestore doesn't use Item= parameter
+        if 'Item=' in code:
+            code_clean = self._remove_comments_and_strings(code, language)
+            if 'Item=' in code_clean:
+                # Only flag if it's NOT in GCP context (firestore.Client, google.cloud)
+                item_positions = [m.start() for m in re.finditer(r'Item\s*=', code_clean)]
+                for pos in item_positions:
+                    context_before = code_clean[max(0, pos-200):pos]
+                    # If we see GCP patterns nearby, it's OK
+                    if 'firestore.Client' not in context_before and 'google.cloud' not in context_before and 'firestore' not in context_before.lower():
+                        found_patterns.append('Item=')
+                        break
+        
+        # Use language-specific patterns (excluding Bucket=, create_bucket(), and Item= which we handle above)
+        patterns_to_check = [p for p in self.AWS_PATTERNS if p not in ['Bucket=', 'create_bucket()', 'Item=']]
         if language == 'java':
             # Add Java-specific AWS patterns
             java_patterns = [

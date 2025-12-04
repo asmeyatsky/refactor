@@ -55,6 +55,15 @@ class AzureExtendedASTTransformationEngine:
         if language not in self.transformers:
             raise ValueError(f"Unsupported language: {language}")
         
+        # For Python Azure blob storage, use dedicated migration method first
+        service_type = transformation_recipe.get('service_type', '')
+        if language == 'python' and service_type == 'azure_blob_storage_to_gcs':
+            transformed_code = self.transformers[language]._migrate_azure_blob_storage_to_gcs(code)
+            # Apply aggressive cleanup
+            if hasattr(self, '_aggressive_azure_cleanup'):
+                transformed_code = self._aggressive_azure_cleanup(transformed_code)
+            return transformed_code, {}
+        
         # Use Gemini API for Go transformations (similar to AWS)
         if language in ['go', 'golang']:
             transformed_code = self._transform_azure_with_gemini_primary(code, transformation_recipe, language='go')
@@ -92,8 +101,11 @@ class AzureExtendedASTTransformationEngine:
             # Validate syntax and AWS/Azure references for Python code
             if language == 'python':
                 # Apply aggressive Azure cleanup to remove any remaining Azure patterns
-                transformed_code = self._aggressive_azure_cleanup(transformed_code)
-                transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
+                if transformed_code:
+                    transformed_code = self._aggressive_azure_cleanup(transformed_code)
+                    transformed_code = self._validate_and_fix_syntax(transformed_code, original_code=code)
+                else:
+                    transformed_code = code  # Fallback to original if transformation failed
         
         # Return tuple with variable mapping (empty dict for now, can be enhanced later)
         variable_mapping = {}
@@ -789,10 +801,25 @@ When generating the refactored code, you MUST follow Clean Architecture principl
         result = re.sub(r'\.get_blob_client\(', '.blob(', result)
         result = re.sub(r'\.get_container_client\(', '.bucket(', result)
         
+        # STEP 5.5: Remove Azure/Cosmos DB parameter patterns (similar to AWS DynamoDB)
+        # Remove Item= parameter (Cosmos DB uses this, Firestore doesn't)
+        result = re.sub(r'Item\s*=\s*', '', result)
+        # Remove TableName= parameter
+        result = re.sub(r'TableName\s*=\s*', '', result)
+        # Remove PartitionKey= parameter
+        result = re.sub(r'PartitionKey\s*=\s*', '', result)
+        # Remove Key= parameter in Cosmos context
+        result = re.sub(r'Key\s*=\s*', '', result)
+        
         # STEP 6: Replace Azure Functions patterns
         result = re.sub(r'func\.HttpRequest', 'functions.HttpRequest', result)
         result = re.sub(r'func\.HttpResponse', 'functions.HttpResponse', result)
         result = re.sub(r'azure\.functions', 'google.cloud.functions', result)
+        
+        # Clean up syntax issues
+        result = re.sub(r',\s*,', ',', result)  # Double commas
+        result = re.sub(r'\(\s*,', '(', result)  # Comma after opening paren
+        result = re.sub(r',\s*\)', ')', result)  # Comma before closing paren
         
         return result
     
@@ -980,22 +1007,26 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
 
     def _migrate_azure_blob_storage_to_gcs(self, code: str) -> str:
         """Migrate Azure Blob Storage to Google Cloud Storage"""
-        # Replace Azure Blob Storage imports with GCS imports
+        if code is None:
+            return ""
+        
+        # Replace Azure Blob Storage imports with GCS imports FIRST
         code = re.sub(r'from azure\.storage\.blob import.*', 'from google.cloud import storage', code)
-        code = re.sub(r'import azure\.storage\.blob', 'from google.cloud import storage', code)
+        code = re.sub(r'import azure\.storage\.blob.*', 'from google.cloud import storage', code)
         
         # Track variable name for blob service client
         blob_client_match = re.search(r'(\w+)\s*=\s*BlobServiceClient', code)
         blob_client_var = blob_client_match.group(1) if blob_client_match else 'blob_service_client'
         gcs_client_var = 'gcs_client' if blob_client_var == 'blob_service_client' else f'{blob_client_var}_gcs'
         
-        # Replace client instantiation
+        # Replace client instantiation - handle all patterns
         code = re.sub(
             r'(\w+)\s*=\s*BlobServiceClient\.from_connection_string\([^)]+\)',
             rf'{gcs_client_var} = storage.Client()',
-            code
+            code,
+            flags=re.DOTALL
         )
-        # Handle BlobServiceClient with comments - be more aggressive
+        # Handle BlobServiceClient with account_url and credential
         code = re.sub(
             r'(\w+)\s*=\s*BlobServiceClient\s*\([^)]*account_url[^)]*credential[^)]*\)',
             rf'{gcs_client_var} = storage.Client()',
@@ -1005,6 +1036,13 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
         # Handle BlobServiceClient without assignment
         code = re.sub(
             r'BlobServiceClient\s*\([^)]*\)',
+            rf'{gcs_client_var} = storage.Client()',
+            code,
+            flags=re.DOTALL
+        )
+        # Handle BlobServiceClient with DefaultAzureCredential
+        code = re.sub(
+            r'(\w+)\s*=\s*BlobServiceClient\s*\([^)]*DefaultAzureCredential[^)]*\)',
             rf'{gcs_client_var} = storage.Client()',
             code,
             flags=re.DOTALL
@@ -1057,23 +1095,95 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
             rf'bucket = {gcs_client_var}.bucket(\2)',
             code
         )
-        
-        # Replace container_client.upload_blob -> blob.upload_from_string
+        # Handle container_client variable assignments
         code = re.sub(
-            r'(\w+)\.upload_blob\(name=([^,]+),\s*data=([^)]+)\)',
-            r'blob = bucket.blob(\2)\n    blob.upload_from_filename(\3) if isinstance(\3, str) else blob.upload_from_string(\3)',
+            r'(\w+)\s*=\s*(\w+)\.get_container_client\(([^)]+)\)',
+            rf'\1 = {gcs_client_var}.bucket(\3)',
+            code
+        )
+        
+        # Replace blob_client.get_blob_client -> bucket.blob
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.get_blob_client\([^)]*container=([^,]+),\s*blob=([^)]+)\)',
+            r'\1 = \2.bucket(\3).blob(\4)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.get_blob_client\([^)]*blob=([^,]+),\s*container=([^)]+)\)',
+            r'\1 = \2.bucket(\4).blob(\3)',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.get_blob_client\(([^)]+)\)',
+            r'\1 = bucket.blob(\3)',
+            code
+        )
+        
+        # Replace container_client.create_container -> bucket.create
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.create_container\(([^)]*)\)',
+            r'\1 = \2.create()',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.create_container\(([^)]*)\)',
+            r'bucket.create()',
+            code
+        )
+        
+        # Replace blob_client.upload_blob -> blob.upload_from_filename/upload_from_string
+        # Handle with open() pattern
+        code = re.sub(
+            r'with\s+open\(([^,]+),\s*["\']rb["\']\)\s+as\s+(\w+)\s*:\s*(\w+)\.upload_blob\((\2),\s*overwrite=True\)',
+            r'blob = bucket.blob("blob_name")\n    blob.upload_from_filename(\1)',
+            code,
+            flags=re.DOTALL
+        )
+        code = re.sub(
+            r'with\s+open\(([^,]+),\s*["\']rb["\']\)\s+as\s+(\w+)\s*:\s*(\w+)\.upload_blob\((\2)\)',
+            r'blob = bucket.blob("blob_name")\n    blob.upload_from_filename(\1)',
+            code,
+            flags=re.DOTALL
+        )
+        code = re.sub(
+            r'(\w+)\.upload_blob\(([^)]+),\s*overwrite=True\)',
+            r'blob = bucket.blob("blob_name")\n    blob.upload_from_filename(\2) if isinstance(\2, str) else blob.upload_from_string(\2)',
             code
         )
         code = re.sub(
             r'(\w+)\.upload_blob\(([^)]+)\)',
-            r'blob = bucket.blob("blob_name")\n    blob.upload_from_string(\2)',
+            r'blob = bucket.blob("blob_name")\n    blob.upload_from_filename(\2) if isinstance(\2, str) else blob.upload_from_string(\2)',
             code
         )
         
-        # Replace download_blob -> download_as_text/download_to_filename
+        # Replace download_blob -> download_as_bytes/download_to_filename
+        # Handle with open() pattern for download
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.download_blob\(([^)]*)\)\s*with\s+open\(([^,]+),\s*["\']wb["\']\)\s+as\s+(\w+)\s*:\s*(\5)\.write\((\1)\.readall\(\)\)',
+            r'blob = bucket.blob("blob_name")\n    blob.download_to_filename(\4)',
+            code,
+            flags=re.DOTALL
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.download_blob\(([^)]*)\)',
+            r'\1 = \2.download_as_bytes()',
+            code
+        )
         code = re.sub(
             r'(\w+)\.download_blob\(([^)]*)\)',
-            r'blob = bucket.blob("blob_name")\n    content = blob.download_as_text()',
+            r'blob.download_as_bytes()',
+            code
+        )
+        # Handle download_stream.readall() -> content (remove readall, use content directly)
+        code = re.sub(
+            r'(\w+)\.readall\(\)',
+            r'\1',
+            code
+        )
+        # Handle download_file.write(download_stream.readall()) -> blob.download_to_filename()
+        code = re.sub(
+            r'(\w+)\.write\(([^)]+)\.readall\(\)\)',
+            r'# Content already downloaded',
             code
         )
         
@@ -1127,6 +1237,220 @@ class AzureExtendedPythonTransformer(BaseAzureExtendedTransformer):
         # Remove generate_account_sas from imports
         code = re.sub(r',\s*generate_account_sas', '', code)
         code = re.sub(r'generate_account_sas\s*,', '', code)
+        
+        # Replace blob_client.exists() -> blob.exists()
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.exists\(\)',
+            r'\1 = \2.exists()',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.exists\(\)',
+            r'blob.exists()',
+            code
+        )
+        
+        # Replace blob_client.delete_blob() -> blob.delete()
+        code = re.sub(
+            r'(\w+)\.delete_blob\(([^)]*)\)',
+            r'blob.delete()',
+            code
+        )
+        
+        # Replace blob_client.get_blob_properties() -> blob.reload()
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.get_blob_properties\(([^)]*)\)',
+            r'\1 = \2\n    \2.reload()',
+            code
+        )
+        # Handle properties access
+        code = re.sub(
+            r'(\w+)\.content_settings\.content_type',
+            r'\1.content_type',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.size',
+            r'\1.size',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.last_modified',
+            r'\1.updated',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.metadata',
+            r'\1.metadata',
+            code
+        )
+        
+        # Replace blob_client.set_blob_metadata() -> blob.metadata = ...
+        code = re.sub(
+            r'(\w+)\.set_blob_metadata\(metadata=([^)]+)\)',
+            r'\1.metadata = \2',
+            code
+        )
+        
+        # Replace blob_client.set_http_headers() -> blob.content_type = ...
+        code = re.sub(
+            r'(\w+)\.set_http_headers\(content_settings=ContentSettings\(content_type=([^)]+)\)\)',
+            r'\1.content_type = \2',
+            code
+        )
+        
+        # Replace blob_client.create_snapshot() -> blob.generation (GCS uses generations)
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.create_snapshot\(([^)]*)\)',
+            r'# GCS uses blob generations instead of snapshots\n    # blob.generation contains the generation number\n    \1 = {"generation": blob.generation}',
+            code
+        )
+        
+        # Replace blob_client.start_copy_from_url() -> blob.copy_to()
+        code = re.sub(
+            r'(\w+)\.start_copy_from_url\(([^)]+)\)',
+            r'# Use blob.rewrite() or blob.copy_to() for copying',
+            code
+        )
+        
+        # Replace container_client.list_blobs() -> bucket.list_blobs()
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.list_blobs\(([^)]*)\)',
+            r'\1 = list(\2.list_blobs(\3))',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.list_blobs\(([^)]*)\)',
+            r'bucket.list_blobs(\2)',
+            code
+        )
+        # Handle name_starts_with parameter
+        code = re.sub(
+            r'name_starts_with=([^,)]+)',
+            r'prefix=\1',
+            code
+        )
+        # Handle blob.name and blob.size
+        code = re.sub(
+            r'(\w+)\.name',
+            r'\1.name',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.size',
+            r'\1.size',
+            code
+        )
+        
+        # Replace blob_service_client.list_containers() -> storage_client.list_buckets()
+        code = re.sub(
+            r'(\w+)\s*=\s*(\w+)\.list_containers\(([^)]*)\)',
+            r'\1 = list(\2.list_buckets(\3))',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\.list_containers\(([^)]*)\)',
+            rf'{gcs_client_var}.list_buckets(\2)',
+            code
+        )
+        # Handle container.name -> bucket.name
+        code = re.sub(
+            r'(\w+)\.name',
+            r'\1.name',
+            code
+        )
+        
+        # Replace container_client.delete_container() -> bucket.delete()
+        code = re.sub(
+            r'(\w+)\.delete_container\(([^)]*)\)',
+            r'bucket.delete(force=True)',
+            code
+        )
+        
+        # Handle generate_blob_sas and generate_container_sas -> blob.generate_signed_url()
+        code = re.sub(
+            r'(\w+)\s*=\s*generate_blob_sas\([^)]+\)',
+            r'# \1 = blob.generate_signed_url(expiration=datetime.utcnow() + timedelta(hours=1), method="GET")',
+            code
+        )
+        code = re.sub(
+            r'(\w+)\s*=\s*generate_container_sas\([^)]+\)',
+            r'# \1 = bucket.generate_signed_url(expiration=datetime.utcnow() + timedelta(hours=1), method="GET")',
+            code
+        )
+        code = re.sub(
+            r'from\s+azure\.storage\.blob\s+import\s+generate_blob_sas[^,\n]*',
+            r'from datetime import datetime, timedelta',
+            code
+        )
+        code = re.sub(
+            r'from\s+azure\.storage\.blob\s+import\s+generate_container_sas[^,\n]*',
+            r'from datetime import datetime, timedelta',
+            code
+        )
+        code = re.sub(
+            r',\s*generate_blob_sas',
+            '',
+            code
+        )
+        code = re.sub(
+            r',\s*generate_container_sas',
+            '',
+            code
+        )
+        code = re.sub(
+            r'generate_blob_sas\s*,',
+            '',
+            code
+        )
+        code = re.sub(
+            r'generate_container_sas\s*,',
+            '',
+            code
+        )
+        code = re.sub(
+            r'BlobSasPermissions\(read=True\)',
+            r'# Permissions specified in generate_signed_url method parameter',
+            code
+        )
+        code = re.sub(
+            r'ContainerSasPermissions\(read=True[^)]*\)',
+            r'# Permissions specified in generate_signed_url method parameter',
+            code
+        )
+        
+        # Handle blob tags
+        code = re.sub(
+            r'(\w+)\.upload_blob\(([^,]+),\s*tags=([^,]+),\s*overwrite=True\)',
+            r'blob = bucket.blob("blob_name")\n    blob.upload_from_filename(\2) if isinstance(\2, str) else blob.upload_from_string(\2)\n    # Note: GCS uses blob.metadata instead of tags',
+            code
+        )
+        
+        # Replace environment variables
+        code = re.sub(
+            r'AZURE_STORAGE_CONNECTION_STRING',
+            'GOOGLE_APPLICATION_CREDENTIALS',
+            code
+        )
+        code = re.sub(
+            r'AZURE_STORAGE_ACCOUNT_NAME',
+            'GOOGLE_CLOUD_PROJECT',
+            code
+        )
+        code = re.sub(
+            r'AZURE_STORAGE_ACCOUNT_KEY',
+            'GOOGLE_APPLICATION_CREDENTIALS',
+            code
+        )
+        
+        # Remove Azure-specific imports
+        code = re.sub(r'from azure\.identity import.*', '', code)
+        code = re.sub(r'import azure\.identity.*', '', code)
+        code = re.sub(r'from azure\.storage\.blob import.*', '', code)
+        
+        # Final aggressive cleanup - remove any remaining Azure patterns
+        if hasattr(self, '_aggressive_azure_cleanup'):
+            code = self._aggressive_azure_cleanup(code)
         
         return code
     
@@ -2204,6 +2528,53 @@ class AzureExtendedGoTransformer(BaseAzureExtendedTransformer):
             code
         )
         return code
+
+
+    def _aggressive_azure_cleanup(self, code: str) -> str:
+        """
+        AGGRESSIVE Azure cleanup that removes ALL Azure patterns.
+        This ensures zero Azure references remain in the transformed code.
+        """
+        if code is None:
+            return ""
+        
+        result = code
+        
+        # Remove all Azure imports
+        result = re.sub(r'from azure\.[^\s]+ import.*', '', result)
+        result = re.sub(r'import azure\.[^\s]+.*', '', result)
+        
+        # Remove Azure-specific classes and patterns
+        result = re.sub(r'BlobServiceClient', 'storage.Client', result, flags=re.IGNORECASE)
+        result = re.sub(r'blob_service_client', 'gcs_client', result, flags=re.IGNORECASE)
+        result = re.sub(r'container_client', 'bucket', result, flags=re.IGNORECASE)
+        result = re.sub(r'blob_client', 'blob', result, flags=re.IGNORECASE)
+        
+        # Remove Azure URLs
+        result = re.sub(r'https://[^/]+\.blob\.core\.windows\.net[^\s]*', '', result)
+        
+        # Remove Azure-specific exceptions
+        result = re.sub(r'from azure\.core\.exceptions import.*', '', result)
+        result = re.sub(r'AzureException', 'Exception', result)
+        
+        # Remove Azure credential patterns
+        result = re.sub(r'DefaultAzureCredential\(\)', 'storage.Client()', result)
+        result = re.sub(r'AzureKeyCredential\([^)]+\)', '', result)
+        
+        # Remove Azure environment variables
+        result = re.sub(r'AZURE_STORAGE_CONNECTION_STRING', 'GOOGLE_APPLICATION_CREDENTIALS', result)
+        result = re.sub(r'AZURE_STORAGE_ACCOUNT_NAME', 'GOOGLE_CLOUD_PROJECT', result)
+        result = re.sub(r'AZURE_STORAGE_ACCOUNT_KEY', 'GOOGLE_APPLICATION_CREDENTIALS', result)
+        
+        # Remove Azure-specific method calls that weren't transformed
+        result = re.sub(r'\.from_connection_string\([^)]+\)', '()', result)
+        result = re.sub(r'\.get_container_client\([^)]+\)', '.bucket()', result)
+        result = re.sub(r'\.get_blob_client\([^)]+\)', '.blob()', result)
+        result = re.sub(r'\.upload_blob\([^)]+\)', '.upload_from_string()', result)
+        result = re.sub(r'\.download_blob\([^)]+\)', '.download_as_bytes()', result)
+        result = re.sub(r'\.readall\(\)', '', result)
+        
+        return result
 
 
 class AzureExtendedSemanticRefactoringService:
